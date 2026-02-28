@@ -250,7 +250,7 @@ class PlayerStatsTask(Task):
         character_stats = {"professions": {}}
 
         for character_uuid in character_uuids:
-            character_data = characters.get(character_uuid, {})
+            character_data = stats.get("characters") or {}
             for character_feature in character_features:
                 character_stats[character_feature] = character_stats.get(character_feature, 0) + PlayerStatsTask.null_or_value(character_data.get(character_feature))
 
@@ -508,36 +508,42 @@ class PlayerStatsTask(Task):
 
     @staticmethod
     def write_results_to_db(inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats):
-        if inserts:
-            curr_time = time.time()
-            query_stats = "REPLACE INTO player_stats VALUES " + ','.join(f"('{x[0]}', {str(x[1])}, {','.join(map(str, x[2:]))})" for x in inserts)
-            query_uuid = "REPLACE INTO uuid_name VALUES " + ','.join(f"(\'{uuid}\',\'{name}\')" for uuid, name in uuid_name)
+        if not (inserts_war_update or inserts_war_deltas or inserts_graid_update or inserts_graid_deltas or inserts_guild_log or inserts or uuid_name or update_player_global_stats or deltas_player_global_stats):
+            return
+
+        curr_time = time.time()
+
+        if inserts_war_update:
             query_wars_update  = "REPLACE INTO cumu_warcounts VALUES " + ','.join(f"(\'{uuid}\',\'{character_id}\', {curr_time}, {warcount}, \'{cl_type}\')" 
                                                                                     for uuid, character_id, warcount, cl_type in inserts_war_update)
+            Connection.execute(query_wars_update)
+
+        if inserts_war_deltas:
             query_wars_delta  = "INSERT INTO delta_warcounts VALUES " + ','.join(f"('{uuid}','{character_id}', {ts}, {wardiff}, '{cl_type}')" 
                                                         for uuid, character_id, ts, wardiff, cl_type in inserts_war_deltas)
+            Connection.execute(query_wars_delta)
+
+        if inserts_graid_update:
             query_graids_update  = "REPLACE INTO cumu_graids VALUES " + ','.join(f"(\'{uuid}\', {curr_time}, {tcc}, {onol}, {notg}, {tna})" 
                                                                                     for uuid, tcc, onol, notg, tna in inserts_graid_update)
+            Connection.execute(query_graids_update)
+
+        if inserts_graid_deltas:
             query_graids_delta  = "INSERT INTO delta_graids VALUES " + ','.join(f"(\'{uuid}\', {ts}, \'{raid_type}\', {graiddiff})" 
                                                         for uuid, ts, raid_type, graiddiff in inserts_graid_deltas)
-            query_global_delta  = "INSERT INTO player_delta_record VALUES " + ','.join(f"(\'{uuid}\',\'{guild}\', {now}, " + '"'+feat_name+'"' + f", {delta_val})" 
-                                                        for uuid, guild, now, feat_name, delta_val in deltas_player_global_stats)
+            Connection.execute(query_graids_delta)
+
+        if update_player_global_stats:
             query_global_update  = "REPLACE INTO player_global_stats VALUES " + ',\n'.join(f"(\'{uuid}\'," + '"'+feat_name+'"'+f", {value})" 
                                                         for uuid, feat_name, value in update_player_global_stats)
+            Connection.execute(query_global_update)
 
-            if inserts_war_update:
-                Connection.execute(query_wars_update)
-            if inserts_war_deltas:
-                Connection.execute(query_wars_delta)
-            if inserts_graid_update:
-                Connection.execute(query_graids_update)
-            if inserts_graid_deltas:
-                Connection.execute(query_graids_delta)
-            if update_player_global_stats:
-                Connection.execute(query_global_update)
-            if deltas_player_global_stats:
-                Connection.execute(query_global_delta)
+        if deltas_player_global_stats:
+            query_global_delta  = "INSERT INTO player_delta_record VALUES " + ','.join(f"(\'{uuid}\',\'{guild}\', {now}, " + '"'+feat_name+'"' + f", {delta_val})" 
+                                                        for uuid, guild, now, feat_name, delta_val in deltas_player_global_stats)
+            Connection.execute(query_global_delta)
 
+        if uuid_name:
             name_paren = ['\''+uuid+'\'' for uuid, _ in uuid_name]
             old_names = Connection.execute(
                 f"SELECT uuid, name FROM uuid_name WHERE uuid IN ({','.join(name_paren)})")
@@ -551,8 +557,12 @@ class PlayerStatsTask(Task):
                     ','.join(f"('{uuid}','{old}','{new}',{curr_time})" for uuid, old, new, curr_time in uuid_name_history_update)
                 Connection.execute(query_uuid_name_history)
 
-            Connection.execute(query_stats)
+            query_uuid = "REPLACE INTO uuid_name VALUES " + ','.join(f"(\'{uuid}\',\'{name}\')" for uuid, name in uuid_name)
             Connection.execute(query_uuid)
+
+        if inserts:
+            query_stats = "REPLACE INTO player_stats VALUES " + ','.join(f"('{x[0]}', {str(x[1])}, {','.join(map(str, x[2:]))})" for x in inserts)
+            Connection.execute(query_stats)
             
         if inserts_guild_log:
             query_guild_log = "INSERT INTO guild_join_log VALUES " + ','.join(inserts_guild_log)
@@ -577,8 +587,7 @@ class PlayerStatsTask(Task):
                 while player_idx < len(search_players):
                     try:
                         player = search_players[player_idx]
-                        if not await PlayerStatsTask.track_player(player, old_membership, prev_warcounts, prev_graidcounts, old_global_data, inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats):
-                            player_idx += 1
+                        await PlayerStatsTask.track_player(player, old_membership, prev_warcounts, prev_graidcounts, old_global_data, inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats)
                         cnt += 1
 
                         if (cnt % 10 == 0 or player_idx == len(search_players)-1):
