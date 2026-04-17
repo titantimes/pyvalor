@@ -67,6 +67,27 @@ class PlayerStatsTask(Task):
         if type(x) == type(None): return 0
         return x
 
+    WARTORN_CO = "The Wartorn Palace"
+    WARTORN_PA = {"unknown"}
+
+    @staticmethod
+    def normalize_raid_name(name: str) -> str:
+        if not isinstance(name, str):
+            return name
+        if name.strip().lower() in PlayerStatsTask.WARTORN_PA:
+            return PlayerStatsTask.WARTORN_CO
+        return name
+
+    @staticmethod
+    def normalise_raiddict(d: dict) -> dict:
+        if not isinstance(d, dict):
+            return {}
+        out = {}
+        for k, v in d.items():
+            nk = PlayerStatsTask.normalize_raid_name(k)
+            out[nk] = PlayerStatsTask.null_or_value(out.get(nk, 0)) + PlayerStatsTask.null_or_value(v)
+        return out
+
     async def get_uuid(player: str):
         if "-" in player: return False
         exist = Connection.execute(f"SELECT * FROM uuid_name WHERE name='{player}' LIMIT 1")
@@ -210,7 +231,17 @@ class PlayerStatsTask(Task):
         for feat in feature_list:
             feat_name = f"{prefix}_{feat}"
             new_val = kv_dict.get(feat, 0)
-            delta_val = (new_val - old_player_global_stats[feat_name]) if old_player_global_stats and feat_name in old_player_global_stats else 0
+            old_val = 0
+            if old_player_global_stats and feat_name in old_player_global_stats:
+                old_val = old_player_global_stats[feat_name]
+            elif (
+                old_player_global_stats
+                and feat_name == f"{prefix}_{PlayerStatsTask.WARTORN_CO}"
+                and f"{prefix}_unknown" in old_player_global_stats
+            ):
+                old_val = old_player_global_stats[f"{prefix}_unknown"]
+
+            delta_val = new_val - old_val
             update_player_global_stats.append((uuid, feat_name, new_val))
             
             if delta_val > 0 and feat_name not in PlayerStatsTask.delta_nowr:
@@ -234,6 +265,7 @@ class PlayerStatsTask(Task):
         global_data_features = ["wars", "totalLevel", "mobsKilled", "chestsFound", "completedQuests"]
         dungeons_list = (global_data.get("dungeons", {}) or {}).get("list", {})
         raids_list = (global_data.get("raids", {}) or {}).get("list", {})
+        raids_list = PlayerStatsTask.normalise_raiddict(raids_list)
         pvp_data = global_data.get("pvp", {}) or {}
         global_data_dungeons_features = list(dungeons_list.keys()) if isinstance(dungeons_list, dict) else []
         global_data_raids_features = list(raids_list.keys()) if isinstance(raids_list, dict) else []
@@ -370,6 +402,7 @@ class PlayerStatsTask(Task):
 
             raids = cl.get("raids", {}) or {}
             raids_list = raids.get("list", {}) or {}
+            raids_list = PlayerStatsTask.normalise_raiddict(raids_list)
             if raids_list:
                 for raid, raid_count in raids_list.items():
                     if raid in PlayerStatsTask.idx:
@@ -399,12 +432,14 @@ class PlayerStatsTask(Task):
         #graid track
         global_data = stats.get("globalData", {}) or {}
         graids = (global_data.get("guildRaids", {}) or {}).get("list", {}) or {}
+        graids = PlayerStatsTask.normalise_raiddict(graids)
         
         raid_columns = {
             "The Canyon Colossus": "tcc",
             "Orphion's Nexus of Light": "onol",
             "Nest of the Grootslangs": "notg",
-            "The Nameless Anomaly": "tna"
+            "The Nameless Anomaly": "tna",
+            PlayerStatsTask.WARTORN_CO: "twp",
         }
         
         raid_update_row = [uuid]
@@ -485,11 +520,32 @@ class PlayerStatsTask(Task):
                 prev_warcounts[uuid] = {}
             prev_warcounts[uuid][character_id] = warcount
         
-        res = Connection.execute(f"SELECT uuid, time, tcc, onol, notg, tna, guild FROM cumu_graids WHERE uuid IN {existing_uuids_clause}",
-                                prep_values=existing_player_uuids)
         prev_graidcounts = {}
-        for uuid, _, tcc, onol, notg, tna, _ in res:
-            prev_graidcounts[uuid] = {"The Canyon Colossus": tcc, "Orphion's Nexus of Light": onol, "Nest of the Grootslangs": notg, "The Nameless Anomaly": tna}
+        try:
+            res = Connection.execute(
+                f"SELECT uuid, time, tcc, onol, notg, tna, twp, guild FROM cumu_graids WHERE uuid IN {existing_uuids_clause}",
+                prep_values=existing_player_uuids,
+            )
+            for uuid, _, tcc, onol, notg, tna, twp, _ in res:
+                prev_graidcounts[uuid] = {
+                    "The Canyon Colossus": tcc,
+                    "Orphion's Nexus of Light": onol,
+                    "Nest of the Grootslangs": notg,
+                    "The Nameless Anomaly": tna,
+                    PlayerStatsTask.WARTORN_CO: twp,
+                }
+        except Exception:
+            res = Connection.execute(
+                f"SELECT uuid, time, tcc, onol, notg, tna, guild FROM cumu_graids WHERE uuid IN {existing_uuids_clause}",
+                prep_values=existing_player_uuids,
+            )
+            for uuid, _, tcc, onol, notg, tna, _ in res:
+                prev_graidcounts[uuid] = {
+                    "The Canyon Colossus": tcc,
+                    "Orphion's Nexus of Light": onol,
+                    "Nest of the Grootslangs": notg,
+                    "The Nameless Anomaly": tna,
+                }
         
         res = Connection.execute(f"SELECT uuid, label, value FROM player_global_stats WHERE uuid IN {existing_uuids_clause}",
                                 prep_values=existing_player_uuids)
@@ -534,9 +590,34 @@ class PlayerStatsTask(Task):
             Connection.execute(query_wars_delta)
 
         if inserts_graid_update:
-            query_graids_update  = "REPLACE INTO cumu_graids VALUES " + ','.join(f"(\'{uuid}\', {curr_time}, {tcc}, {onol}, {notg}, {tna}, \'{guild}\')" 
-                                                                                    for uuid, tcc, onol, notg, tna, guild in inserts_graid_update)
-            Connection.execute(query_graids_update)
+            if inserts_graid_update and len(inserts_graid_update[0]) == 7:
+                try:
+                    query_graids_update = (
+                        "REPLACE INTO cumu_graids (uuid, time, tcc, onol, notg, tna, twp, guild) VALUES "
+                        + ",".join(
+                            f"('{uuid}', {curr_time}, {tcc}, {onol}, {notg}, {tna}, {twp}, '{guild}')"
+                            for uuid, tcc, onol, notg, tna, twp, guild in inserts_graid_update
+                        )
+                    )
+                    Connection.execute(query_graids_update)
+                except Exception:
+                    query_graids_update = (
+                        "REPLACE INTO cumu_graids (uuid, time, tcc, onol, notg, tna, guild) VALUES "
+                        + ",".join(
+                            f"('{uuid}', {curr_time}, {tcc}, {onol}, {notg}, {tna}, '{guild}')"
+                            for uuid, tcc, onol, notg, tna, _twp, guild in inserts_graid_update
+                        )
+                    )
+                    Connection.execute(query_graids_update)
+            else:
+                query_graids_update = (
+                    "REPLACE INTO cumu_graids (uuid, time, tcc, onol, notg, tna, guild) VALUES "
+                    + ",".join(
+                        f"('{uuid}', {curr_time}, {tcc}, {onol}, {notg}, {tna}, '{guild}')"
+                        for uuid, tcc, onol, notg, tna, guild in inserts_graid_update
+                    )
+                )
+                Connection.execute(query_graids_update)
 
         if inserts_graid_deltas:
             query_graids_delta  = "INSERT INTO delta_graids VALUES " + ','.join(f"(\'{uuid}\', {ts}, " + '"'+raid_type+'"' + f", {graiddiff}, \'{guild}\')" 
