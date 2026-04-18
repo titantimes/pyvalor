@@ -289,6 +289,27 @@ class PlayerStatsTask(Task):
         uri = f"https://api.wynncraft.com/v3/player/{player}?fullResult"
         try:
             stats = await Async.get(uri)
+            if isinstance(stats, dict) and stats.get("code") == 300 and stats.get("error") == "MultipleObjectsReturned":
+                objects = stats.get("objects") or {}
+                if isinstance(objects, dict) and objects:
+                    prefuuid = None
+                    for probscorrectuuid, candidate_obj in objects.items():
+                        if not isinstance(candidate_obj, dict):
+                            continue
+                        if candidate_obj.get("supportRank") is not None:
+                            prefuuid = probscorrectuuid
+                            break
+
+                    if prefuuid is None:
+                        prefuuid = next(iter(objects.keys()))
+
+                    if isinstance(prefuuid, str) and "-" not in prefuuid and len(prefuuid) == 32:
+                        prefuuid = prefuuid[:8] + '-' + prefuuid[8:12] + '-' + prefuuid[12:16] + '-' + prefuuid[16:20] + '-' + prefuuid[20:]
+
+                    logger.info(f"PLAYER STATS multiple objects for {player}; retrying by uuid {prefuuid}")
+                    uri = f"https://api.wynncraft.com/v3/player/{prefuuid}?fullResult"
+                    stats = await Async.get(uri)
+
             first_key = [*stats][0]
             if "storedName" in stats[first_key]: # there are multiple players so select the first any with a rank
                 rank_order = dict(enumerate([None, "vip", "vipplus", "hero", "champion"]))
