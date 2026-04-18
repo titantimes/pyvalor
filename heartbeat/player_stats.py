@@ -24,7 +24,8 @@ class PlayerStatsTask(Task):
                'combat': 26, 'cooking': 27, 'farming': 28, 'fishing': 29, 'jeweling': 30, 'mining': 31, 'scribing': 32, 'tailoring': 33, 
                'weaponsmithing': 34, 'woodcutting': 35, 'woodworking': 36, 'Nest of the Grootslangs': 37, 'The Canyon Colossus': 38, 
                "mobsKilled": 39, "deaths": 40, "guild": 41, "Orphion's Nexus of Light": 42, "guild_rank": 43, "The Nameless Anomaly": 44, 
-               "Corrupted Galleon's Graveyard": 45, "Timelost Sanctum": 46, "lastjoin": 47}
+               "Corrupted Galleon's Graveyard": 45, "Timelost Sanctum": 46, "lastjoin": 47,
+               "The Wartorn Palace": 48}
     
     global_stats_threshold = {"g_mobsKilled": 2500, "g_chestsFound": 20, "g_totalLevel": 3}
 
@@ -37,6 +38,7 @@ class PlayerStatsTask(Task):
         "g_The Canyon Colossus": 50,
         "g_Orphion's Nexus of Light": 50,
         "g_The Nameless Anomaly": 50,
+        "g_The Wartorn Palace": 50,
     }
     
     warsmooththresh = 50
@@ -66,6 +68,10 @@ class PlayerStatsTask(Task):
     def null_or_value(x): 
         if type(x) == type(None): return 0
         return x
+
+    @staticmethod
+    def normalise_raid_name(raid_name: str) -> str:
+        return "The Wartorn Palace" if raid_name == "unknown" else raid_name #while wtp is called unknwon in the api 
 
     async def get_uuid(player: str):
         if "-" in player: return False
@@ -236,6 +242,8 @@ class PlayerStatsTask(Task):
         raids_list = (global_data.get("raids", {}) or {}).get("list", {})
         pvp_data = global_data.get("pvp", {}) or {}
         global_data_dungeons_features = list(dungeons_list.keys()) if isinstance(dungeons_list, dict) else []
+        if isinstance(raids_list, dict):
+            raids_list = {PlayerStatsTask.normalise_raid_name(k): v for k, v in raids_list.items()}
         global_data_raids_features = list(raids_list.keys()) if isinstance(raids_list, dict) else []
         global_data_pvp_features = ["kills", "deaths"]
         now = time.time()
@@ -372,8 +380,9 @@ class PlayerStatsTask(Task):
             raids_list = raids.get("list", {}) or {}
             if raids_list:
                 for raid, raid_count in raids_list.items():
-                    if raid in PlayerStatsTask.idx:
-                        row[PlayerStatsTask.idx[raid]] += raid_count
+                    normalised_raid = PlayerStatsTask.normalise_raid_name(raid)
+                    if normalised_raid in PlayerStatsTask.idx:
+                        row[PlayerStatsTask.idx[normalised_raid]] += raid_count
 
             row[PlayerStatsTask.idx["itemsIdentified"]] += PlayerStatsTask.null_or_value(cl.get("itemsIdentified", 0))
             row[PlayerStatsTask.idx["mobsKilled"]] += PlayerStatsTask.null_or_value(cl.get("mobsKilled", 0))
@@ -399,12 +408,15 @@ class PlayerStatsTask(Task):
         #graid track
         global_data = stats.get("globalData", {}) or {}
         graids = (global_data.get("guildRaids", {}) or {}).get("list", {}) or {}
+        if isinstance(graids, dict):
+            graids = {PlayerStatsTask.normalise_raid_name(k): v for k, v in graids.items()}
         
         raid_columns = {
             "The Canyon Colossus": "tcc",
             "Orphion's Nexus of Light": "onol",
             "Nest of the Grootslangs": "notg",
-            "The Nameless Anomaly": "tna"
+            "The Nameless Anomaly": "tna",
+            "The Wartorn Palace": "twp",
         }
         
         raid_update_row = [uuid]
@@ -485,11 +497,11 @@ class PlayerStatsTask(Task):
                 prev_warcounts[uuid] = {}
             prev_warcounts[uuid][character_id] = warcount
         
-        res = Connection.execute(f"SELECT uuid, time, tcc, onol, notg, tna, guild FROM cumu_graids WHERE uuid IN {existing_uuids_clause}",
+        res = Connection.execute(f"SELECT uuid, time, tcc, onol, notg, tna, twp, guild FROM cumu_graids WHERE uuid IN {existing_uuids_clause}",
                                 prep_values=existing_player_uuids)
         prev_graidcounts = {}
-        for uuid, _, tcc, onol, notg, tna, _ in res:
-            prev_graidcounts[uuid] = {"The Canyon Colossus": tcc, "Orphion's Nexus of Light": onol, "Nest of the Grootslangs": notg, "The Nameless Anomaly": tna}
+        for uuid, _, tcc, onol, notg, tna, twp, _ in res:
+            prev_graidcounts[uuid] = {"The Canyon Colossus": tcc, "Orphion's Nexus of Light": onol, "Nest of the Grootslangs": notg, "The Nameless Anomaly": tna, "The Wartorn Palace": twp}
         
         res = Connection.execute(f"SELECT uuid, label, value FROM player_global_stats WHERE uuid IN {existing_uuids_clause}",
                                 prep_values=existing_player_uuids)
@@ -534,8 +546,8 @@ class PlayerStatsTask(Task):
             Connection.execute(query_wars_delta)
 
         if inserts_graid_update:
-            query_graids_update  = "REPLACE INTO cumu_graids VALUES " + ','.join(f"(\'{uuid}\', {curr_time}, {tcc}, {onol}, {notg}, {tna}, \'{guild}\')" 
-                                                                                    for uuid, tcc, onol, notg, tna, guild in inserts_graid_update)
+            query_graids_update  = "REPLACE INTO cumu_graids VALUES " + ','.join(f"(\'{uuid}\', {curr_time}, {tcc}, {onol}, {notg}, {tna}, {twp}, \'{guild}\')" 
+                                                                                    for uuid, tcc, onol, notg, tna, twp, guild in inserts_graid_update)
             Connection.execute(query_graids_update)
 
         if inserts_graid_deltas:
