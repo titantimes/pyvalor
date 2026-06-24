@@ -44,7 +44,7 @@ class GuildScheduleTrackerTask(Task):
                     oneDayAgo = start - 86400
                     twoDaysAgo = start - 86400 * 2
                     graidQuery = """
-SELECT guild, SUM(graiddiff) as dailyGraids
+SELECT guild, SUM(graidcount_diff) as dailyGraids
 FROM delta_graids
 WHERE time >= %s
 GROUP BY guild
@@ -52,7 +52,7 @@ GROUP BY guild
                     graidResults = Connection.execute(graidQuery, prep_values=[oneDayAgo])
 
                     twoDayQuery = """
-SELECT guild, SUM(graiddiff) as twoDayGraids
+SELECT guild, SUM(graidcount_diff) as twoDayGraids
 FROM delta_graids
 WHERE time >= %s
 GROUP BY guild
