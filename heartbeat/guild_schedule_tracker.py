@@ -8,7 +8,7 @@ graidExceptions = {}
 gxpLevelExceptions = ["Titans Valor", "The Aquarium", "Avicia", "Empire of Sindria", "KongoBoys", "Paladins United", "Nerfuria", "Eden", "Idiot Co", "Hesperides", "The Broken Gasmask", "Anime Lovers", "TruthSword", "Empire of TKW", "Black Fangs", "Profession Heaven", "Chiefs Of Corkus", "Cirrus", "HackForums", "Emorians", "The Simple Ones", "Sins of Seedia", "IceBlue Team", "Polish Hussars"]
 
 tierIntervals = {
-    1: 1800,
+    1: 1200,
     2: 600,
     3: 300,
 }
@@ -19,11 +19,11 @@ class GuildScheduleTrackerTask(Task):
 
     @staticmethod
     def getTierFromGraids(dailyGraids):
-        if dailyGraids >= 200:
+        if dailyGraids >= 150:
             return 3
-        elif dailyGraids >= 100:
+        elif dailyGraids >= 75:
             return 2
-        elif dailyGraids >= 50:
+        elif dailyGraids >= 25:
             return 1
         return 0
 
