@@ -106,7 +106,7 @@ class PlayerStatsTask(Task):
     def get_last_delta_timestamp(uuid, feat_name):
         try:
             result = Connection.execute(
-                "SELECT MAX(time) FROM player_delta_record WHERE uuid = ? AND feature = ?", 
+                "SELECT MAX(time) FROM player_delta_record WHERE uuid = %s AND label = %s", 
                 prep_values=[uuid, feat_name]
             )
             if result and result[0][0]:
@@ -121,7 +121,7 @@ class PlayerStatsTask(Task):
     def get_last_war_delta_timestamp(uuid, character_id):
         try:
             result = Connection.execute(
-                "SELECT MAX(time) FROM delta_warcounts WHERE uuid = ? AND character_id = ?", 
+                "SELECT MAX(time) FROM delta_warcounts WHERE uuid = %s AND character_id = %s", 
                 prep_values=[uuid, character_id]
             )
             if result and result[0][0]:
@@ -136,7 +136,7 @@ class PlayerStatsTask(Task):
     def get_last_graid_delta_timestamp(uuid, raid_type):
         try:
             result = Connection.execute(
-                "SELECT MAX(time) FROM delta_graids WHERE uuid = ? AND raid_type = ?", 
+                "SELECT MAX(time) FROM delta_graids WHERE uuid = %s AND raid_type = %s", 
                 prep_values=[uuid, raid_type]
             )
             if result and result[0][0]:
@@ -365,7 +365,7 @@ class PlayerStatsTask(Task):
         except Exception as e:
             logger.exception(e)
 
-        character_data = stats.get("characters", {})
+        character_data = stats.get("characters") or {}
         for cl_name in character_data:
             cl = character_data[cl_name]
             cl_type = cl["type"]
