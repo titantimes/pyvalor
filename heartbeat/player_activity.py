@@ -25,12 +25,24 @@ class PlayerActivityTask(Task):
             start = time.time()
             
             onlineResponse = await Async.get("https://api.wynncraft.com/v3/player")
-            if not isinstance(onlineResponse, dict) or "players" not in onlineResponse or not isinstance(onlineResponse["players"], list):
+            if not isinstance(onlineResponse, dict) or "players" not in onlineResponse:
                 logger.warning("PLAYER ACTIVITY TASK: invalid /v3/player response")
                 await asyncio.sleep(self.sleep)
                 return
 
-            online_all = {x for x in onlineResponse["players"]}
+            playersData = onlineResponse["players"]
+            if isinstance(playersData, list):
+                online_all = set(playersData)
+            elif isinstance(playersData, dict):
+                online_all = set()
+                for worldPlayers in playersData.values():
+                    if isinstance(worldPlayers, list):
+                        for playerName in worldPlayers:
+                            online_all.add(playerName)
+            else:
+                logger.warning("PLAYER ACTIVITY TASK: some fields are missing or some")
+                await asyncio.sleep(self.sleep)
+                return
 
             scheduledGuilds = Connection.execute("SELECT guild FROM guild_tracking_schedule WHERE tier > 0")
             guildsList = [g[0] for g in scheduledGuilds] if scheduledGuilds else []
