@@ -11,11 +11,12 @@ from .guild_schedule_tracker import GuildScheduleTrackerTask
 from .season_rating_tracker import SeasonRatingTrackerTask
 from .player_last_join import PlayerLastJoinTask
 from dotenv import load_dotenv
+from log import logger
 import asyncio
 import os
 
 load_dotenv()
-enabled = os.environ["ENABLED"].lower().split(',')
+enabled = [x.strip().lower() for x in os.environ["ENABLED"].split(',') if x.strip()]
 
 class Heartbeat:
     wsconns = set()
@@ -35,8 +36,13 @@ class Heartbeat:
     
     @staticmethod
     def run_tasks():
+        logger.info(f"ENABLED TASK TOKENS: {enabled}")
         for t in Heartbeat.tasks:
-            if not t.__class__.__name__.lower() in enabled: continue
+            taskName = t.__class__.__name__.lower()
+            if taskName not in enabled:
+                logger.info(f"SKIP TASK {taskName}")
+                continue
+            logger.info(f"START TASK {taskName}")
             t.run()
 
     @staticmethod
