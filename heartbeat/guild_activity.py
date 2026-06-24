@@ -30,8 +30,15 @@ class GuildActivityTask(Task):
             while not self.finished:
                 logger.info("GUILD ACTIVITY TRACK START")
                 start = time.time()
+                now = int(start)
 
-                guildmembers_data = (await Async.get("https://api.wynncraft.com/v3/guild/Titans%20Valor"))["members"]
+                tvResponse = await Async.get("https://api.wynncraft.com/v3/guild/Titans%20Valor")
+                if not isinstance(tvResponse, dict) or "members" not in tvResponse or not isinstance(tvResponse["members"], dict):
+                    logger.warning("GUILD ACTIVITY TASK: invalid Titans Valor guild response")
+                    await asyncio.sleep(self.sleep)
+                    continue
+
+                guildmembers_data = tvResponse["members"]
                 currentguild = set()
                 for rank in guildmembers_data:
                     if type(guildmembers_data[rank]) != dict: continue
@@ -62,28 +69,43 @@ class GuildActivityTask(Task):
 
                 self.guildmembers_check = set(currentguild)
                 
-                # Get guild list and fetch online counts directly from guild endpoints
-                guilds = [g[0] for g in Connection.execute("SELECT * FROM guild_list")]
-                guild_member_cnt = {}
+                scheduledGuilds = Connection.execute("SELECT guild FROM guild_tracking_schedule WHERE nextSync <= %s", prep_values=[now])
+                guildsList = [g[0] for g in scheduledGuilds] if scheduledGuilds else []
+                guildMemberCnt = {}
                 
-                for guild in guilds:
+                for guild in guildsList:
                     try:
-                        guild_url = f"https://api.wynncraft.com/v3/guild/{guild.replace(' ', '%20')}"
-                        guild_response = await Async.get(guild_url)
-                        if "online" in guild_response:
-                            guild_member_cnt[guild] = guild_response["online"]
+                        guildUrl = f"https://api.wynncraft.com/v3/guild/{guild.replace(' ', '%20')}"
+                        guildResponse = await Async.get(guildUrl)
+                        if "online" in guildResponse:
+                            guildMemberCnt[guild] = guildResponse["online"]
                         else:
-                            guild_member_cnt[guild] = 0
+                            guildMemberCnt[guild] = 0
                     except Exception as e:
                         logger.error(f"Failed to fetch online count for guild {guild}: {e}")
-                        guild_member_cnt[guild] = 0
+                        guildMemberCnt[guild] = 0
 
-                now = int(time.time())
-                if guild_member_cnt:
-                    insert_values = ','.join(f"(\"{guild}\", {guild_member_cnt[guild]}, {now})" for guild in guild_member_cnt)
-                    if insert_values:
-                        Connection.execute("INSERT INTO guild_member_count VALUES " + insert_values)
-                        logger.info(f"Inserted guild member counts for {len(guild_member_cnt)} guilds")
+                if guildMemberCnt:
+                    insertValues = ','.join(f"(\"{guild}\", {guildMemberCnt[guild]}, {now})" for guild in guildMemberCnt)
+                    if insertValues:
+                        Connection.execute("INSERT INTO guild_member_count VALUES " + insertValues)
+                        logger.info(f"Inserted guild member counts for {len(guildMemberCnt)} guilds")
+                    
+                    for guild in guildsList:
+                        Connection.execute(
+                            """
+UPDATE guild_tracking_schedule
+SET lastSync = %s,
+    nextSync = %s + CASE tier
+        WHEN 3 THEN 300
+        WHEN 2 THEN 600
+        WHEN 1 THEN 1800
+        ELSE 1800
+    END
+WHERE guild = %s
+""",
+                            prep_values=[now, now, guild]
+                        )
                 else:
                     logger.info("No guild member data to insert")
 

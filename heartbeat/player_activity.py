@@ -23,17 +23,26 @@ class PlayerActivityTask(Task):
 
             logger.info("PLAYER ACTIVITY TRACK START")
             start = time.time()
-            online_all = await Async.get("https://api.wynncraft.com/v3/player")
-            online_all = {x for x in online_all["players"]}
+            
+            onlineResponse = await Async.get("https://api.wynncraft.com/v3/player")
+            if not isinstance(onlineResponse, dict) or "players" not in onlineResponse or not isinstance(onlineResponse["players"], list):
+                logger.warning("PLAYER ACTIVITY TASK: invalid /v3/player response")
+                await asyncio.sleep(self.sleep)
+                return
 
+            online_all = {x for x in onlineResponse["players"]}
+
+            scheduledGuilds = Connection.execute("SELECT guild FROM guild_tracking_schedule WHERE tier > 0")
+            guildsList = [g[0] for g in scheduledGuilds] if scheduledGuilds else []
+
+            player_to_guild = {}
+            syncedGuilds = []
             inserts = []
 
-            res = Connection.execute('SELECT * FROM guild_list')
-            player_to_guild = {}
-            player_to_guild_tuples = []
-
-            for guild, in res:
+            for guild in guildsList:
                 guild_data = await Async.get("https://api.wynncraft.com/v3/guild/" + guild)
+                if not isinstance(guild_data, dict):
+                    continue
                 guild_members = []
                 if guild_data is None or not "members" in guild_data: continue
                     
@@ -43,18 +52,9 @@ class PlayerActivityTask(Task):
                 
                 for member, uuid in guild_members:
                     player_to_guild[member] = guild, uuid
-                    player_to_guild_tuples.append((guild, member))
-            
-            Connection.execute(f"DELETE FROM guild_member_cache")
+                syncedGuilds.append(guild)
 
-            for i in range(0, len(player_to_guild_tuples), 256):
-                try:
-                    pairs_flat = [y for x in player_to_guild_tuples[i:i+256] for y in x]
-                    Connection.execute(f"INSERT INTO guild_member_cache VALUES " + ("(%s, %s),"*(len(pairs_flat)//2))[:-1], prepared=True, prep_values=pairs_flat)
-                except Exception as e:
-                    logger.info(f"PLAYER ACTIVITY TASK ERROR")
-                    logger.exception(e)
-                    self.finished = True
+            syncedGuilds = list(set(syncedGuilds))
 
             intersection = online_all & player_to_guild.keys()
 

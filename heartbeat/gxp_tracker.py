@@ -8,10 +8,9 @@ import time
 import sys
 import math
 from log import logger
-import math
 import traceback
 
-EXCEPTIONS = ["Titans Valor", "The Aquarium", "Avicia", "Empire of Sindria", "KongoBoys", "Paladins United", "Nerfuria", "Empire of Sindria", "Eden", "Idiot Co", "Hesperides", "The Broken Gasmask", "Anime Lovers", "TruthSword", "Emipre of TKW", "Black Fangs", "Profession Heaven", "Chiefs Of Corkus", "Cirrus"]
+gxpLevelExceptions = ["Titans Valor", "The Aquarium", "Avicia", "Empire of Sindria", "KongoBoys", "Paladins United", "Nerfuria", "Eden", "Idiot Co", "Hesperides", "The Broken Gasmask", "Anime Lovers", "TruthSword", "Emipre of TKW", "Black Fangs", "Profession Heaven", "Chiefs Of Corkus", "Cirrus", "HackForums", "Emorians", "The Simple Ones", "Sins of Seedia", "IceBlue Team", "Polish Hussars"]
 
 class GXPTrackerTask(Task):
     def __init__(self, start_after, sleep):
@@ -22,174 +21,149 @@ class GXPTrackerTask(Task):
         if level >= 130:
             return 885689 * math.exp(0.139808 * 130)
         return 885689 * math.exp(0.139808 * level)
-    
+
     @staticmethod
     def xp_to_float_level(xp):
-        return math.log(xp/885689)/0.139808
+        return math.log(xp / 885689) / 0.139808
 
     @staticmethod
     def level_pct_to_float(level, pct):
-        xp_to_curr = GXPTrackerTask.level_to_xp(level)
-        xp_to_next = GXPTrackerTask.level_to_xp(level + 1)
-        curr_xp = xp_to_curr + pct*(xp_to_next - xp_to_curr)
-        
-        return GXPTrackerTask.xp_to_float_level(curr_xp)
-        
+        xpToCurr = GXPTrackerTask.level_to_xp(level)
+        xpToNext = GXPTrackerTask.level_to_xp(level + 1)
+        currXp = xpToCurr + pct * (xpToNext - xpToCurr)
+        return GXPTrackerTask.xp_to_float_level(currXp)
+
     def stop(self):
         self.finished = True
         self.continuous_task.cancel()
 
     def run(self):
         self.finished = False
+
         async def gxp_tracker_task():
             await asyncio.sleep(self.start_after)
 
             while not self.finished:
                 logger.info("GXP START")
                 start = time.time()
+                end = start
 
-                guild_names = Connection.execute("SELECT guild, priority FROM guild_autotrack_active ORDER BY priority DESC LIMIT 50;")
-                
-                existing = {g for g, _ in guild_names}
-                for eg in EXCEPTIONS:
-                    if eg not in existing:
-                        guild_names.insert(0, (eg, 3000))
-                
+                guildRows = Connection.execute("SELECT guild FROM guild_tracking_schedule ORDER BY tier DESC, dailyGraids DESC;")
+                guildList = [g[0] for g in guildRows] if guildRows else []
+
+                for guild in gxpLevelExceptions:
+                    if guild not in guildList:
+                        guildList.insert(0, guild)
+
                 res = Connection.execute("SELECT uuid, value FROM player_global_stats WHERE label='gu_gxp'")
-                prev_member_gxps = {}
+                prevMemberGxps = {}
                 for uuid, value in res:
-                    prev_member_gxps[uuid] = value
+                    prevMemberGxps[uuid] = value
 
-                active_guild_rows = []
-                for guild, priority in guild_names:
-                    URL = f"https://api.wynncraft.com/v3/guild/{guild}"
-                    g = await Async.get(URL)
-                    if g is None or not "members" in g or not "level" in g:
-                        continue    
+                for guild in guildList:
+                    guildUrl = f"https://api.wynncraft.com/v3/guild/{guild}"
+                    guildData = await Async.get(guildUrl)
+                    if guildData is None or "members" not in guildData or "level" not in guildData:
+                        continue
 
-                    guild_level, guild_percent = g["level"], g["xpPercent"] * 0.01
-                    gu_float_lvl = GXPTrackerTask.level_pct_to_float(guild_level, guild_percent)
-                    
-                    if guild_level >= 130:
-                        gu_req_to_next_xp = 10367116453807 # GXPTrackerTask.level_to_xp(131) - GXPTrackerTask.level_to_xp(130)
+                    guildLevel = guildData["level"]
+                    guildPercent = guildData["xpPercent"] * 0.01
+                    _ = GXPTrackerTask.level_pct_to_float(guildLevel, guildPercent)
+
+                    if guildLevel >= 130:
+                        guReqToNextXp = 10367116453807
                     else:
-                        gu_req_to_next_xp = GXPTrackerTask.level_to_xp(guild_level+1) - GXPTrackerTask.level_to_xp(guild_level)
-                        
-                    count_raid_threshold = 1/1.15 * gu_req_to_next_xp / 1000 / 4 # 1/1.15 in case it happened on lvl up boundary
-                    
-                    if "xpPercent" in g:
-                        active_guild_rows.append((g["name"], priority, gu_float_lvl))
-                    else:
-                        logger.warn(f"guild {g['name']} does not have level or xpPercent info")
+                        guReqToNextXp = GXPTrackerTask.level_to_xp(guildLevel + 1) - GXPTrackerTask.level_to_xp(guildLevel)
+
+                    countRaidThreshold = 1 / 1.15 * guReqToNextXp / 1000 / 4
 
                     members = []
-                    insert_gxp_deltas = []
-                    update_gxp_values = []
+                    insertGxpDeltas = []
+                    updateGxpValues = []
+                    insertRaidDeltas = []
 
-                    insert_raid_deltas = []
+                    for rank in guildData["members"]:
+                        if type(guildData["members"][rank]) != dict:
+                            continue
+                        for memberName in guildData["members"][rank]:
+                            memberFields = guildData["members"][rank][memberName]
+                            members.append({"name": memberName, **memberFields})
+                            gxpDelta = memberFields["contributed"] - prevMemberGxps.get(memberFields["uuid"], memberFields["contributed"])
+                            updateGxpValues.append((memberFields["uuid"], memberFields["contributed"]))
+                            if gxpDelta > 0:
+                                insertGxpDeltas.append((memberFields["uuid"], gxpDelta))
 
-                    for rank in g["members"]:
-                        if type(g["members"][rank]) != dict: continue
-                        for member_name in g["members"][rank]:
-                            member_fields = g["members"][rank][member_name]
-                            members.append({"name": member_name, **g["members"][rank][member_name]})
-                            gxp_delta = member_fields["contributed"] - prev_member_gxps.get(member_fields["uuid"], member_fields["contributed"])
-                            update_gxp_values.append((member_fields["uuid"], member_fields["contributed"]))
-
-                            if gxp_delta > 0:
-                                member_uuid = member_fields["uuid"]
-                                insert_gxp_deltas.append((member_uuid, gxp_delta))
-
-                    for member_uuid, gxp_delta in insert_gxp_deltas:
-                        if guild_level >= 95 and gxp_delta >= count_raid_threshold and count_raid_threshold > 0:
-                            num_raids = gxp_delta // count_raid_threshold
-                            insert_raid_deltas.append((member_uuid, guild, start, num_raids))
+                    for memberUuid, gxpDelta in insertGxpDeltas:
+                        if guildLevel >= 95 and gxpDelta >= countRaidThreshold and countRaidThreshold > 0:
+                            numRaids = gxpDelta // countRaidThreshold
+                            insertRaidDeltas.append((memberUuid, guild, start, numRaids))
 
                     if guild == "Titans Valor":
+                        queryResult = Connection.execute("SELECT * FROM user_total_xps")
+                        uuidToXp = {x[4]: x[:4] for x in queryResult}
 
-                        query = Connection.execute(f"SELECT * FROM user_total_xps")
-                        uuid_to_xp = {x[4]: x[:4] for x in query} 
+                        newQueries = []
+                        newMembers = []
 
-                        new_queries = []
-                        new_members = []
-                        record_xps = []
-
-                        for m in members:
-                            if m["uuid"] not in uuid_to_xp:
-                                # New user
-                                new_members.append(
-                                    f"(\"{m['name']}\",{m['contributed']},{m['contributed']},\"Titans Valor\",\"{m['uuid']}\")"
+                        for member in members:
+                            if member["uuid"] not in uuidToXp:
+                                newMembers.append(
+                                    f"(\"{member['name']}\",{member['contributed']},{member['contributed']},\"Titans Valor\",\"{member['uuid']}\")"
                                 )
-                            elif m["contributed"] < uuid_to_xp[m["uuid"]][2]:
-                                # User rejoins
-                                new_xp = uuid_to_xp[m["uuid"]][1] + m["contributed"]
-                                new_queries.append(
-                                    f"UPDATE user_total_xps SET xp={new_xp}, last_xp={m['contributed']} WHERE uuid=\"{m['uuid']}\";")
-                                record_xps.append(
-                                    f"(\"{m['uuid']}\", \"{m['name']}\", \"Titans Valor\", {m['contributed']}, {int(time.time())})")
-                            elif m["contributed"] > uuid_to_xp[m["uuid"]][2]:
-                                # User gains xp
-                                delta = m["contributed"] - uuid_to_xp[m["uuid"]][2]
-                                new_xp = uuid_to_xp[m["uuid"]][1] + delta
-                                new_queries.append(
-                                    f"UPDATE user_total_xps SET xp={new_xp}, last_xp={m['contributed']} WHERE uuid=\"{m['uuid']}\";")
-                                record_xps.append(
-                                    f"(\"{m['uuid']}\", \"{m['name']}\", \"Titans Valor\", {delta}, {int(time.time())})")
+                            elif member["contributed"] < uuidToXp[member["uuid"]][2]:
+                                newXp = uuidToXp[member["uuid"]][1] + member["contributed"]
+                                newQueries.append(
+                                    f"UPDATE user_total_xps SET xp={newXp}, last_xp={member['contributed']} WHERE uuid=\"{member['uuid']}\";"
+                                )
+                            elif member["contributed"] > uuidToXp[member["uuid"]][2]:
+                                delta = member["contributed"] - uuidToXp[member["uuid"]][2]
+                                newXp = uuidToXp[member["uuid"]][1] + delta
+                                newQueries.append(
+                                    f"UPDATE user_total_xps SET xp={newXp}, last_xp={member['contributed']} WHERE uuid=\"{member['uuid']}\";"
+                                )
 
-                        if new_members:
-                            Connection.execute(f"INSERT INTO user_total_xps VALUES {','.join(new_members)};")
-                        # if record_xps:
-                        #     Connection.execute(f"INSERT INTO member_record_xps VALUES {','.join(record_xps)};")
-                        if new_queries:
-                            Connection.exec_all(new_queries)
+                        if newMembers:
+                            Connection.execute(f"INSERT INTO user_total_xps VALUES {','.join(newMembers)};")
+                        if newQueries:
+                            Connection.exec_all(newQueries)
 
-                    formatted_members = ','.join(f"(\'{guild}\', '{member['name']}')" for member in members)
-                    update_members_query_1 = f"DELETE FROM guild_member_cache WHERE guild='{guild}'"
-                    update_members_query_2 = f"INSERT INTO guild_member_cache (guild, name) VALUES {formatted_members}"
-                    Connection.exec_all([update_members_query_1, update_members_query_2])
-
-                    if insert_raid_deltas:
-                        query = "INSERT INTO guild_raid_records VALUES " + ("(%s, %s, %s, %s),"*len(insert_raid_deltas))[:-1]
+                    if insertRaidDeltas:
+                        query = "INSERT INTO guild_raid_records VALUES " + ("(%s, %s, %s, %s)," * len(insertRaidDeltas))[:-1]
                         try:
-                            Connection.execute(query, prep_values=[y for x in insert_raid_deltas for y in x], fetchall=False)
-                        except Exception as raid_insert_err:
+                            Connection.execute(query, prep_values=[value for row in insertRaidDeltas for value in row], fetchall=False)
+                        except Exception as raidInsertErr:
                             logger.error(
                                 "Batch insert into guild_raid_records failed (%s). Falling back to per-row insert.",
-                                raid_insert_err,
+                                raidInsertErr,
                             )
                             logger.error(traceback.format_exc())
-                            single_row_query = "INSERT INTO guild_raid_records VALUES (%s, %s, %s, %s)"
-                            for row in insert_raid_deltas:
+                            singleRowQuery = "INSERT INTO guild_raid_records VALUES (%s, %s, %s, %s)"
+                            for row in insertRaidDeltas:
                                 try:
-                                    Connection.execute(single_row_query, prepared=True, prep_values=list(row), fetchall=False)
-                                except Exception as row_insert_err:
+                                    Connection.execute(singleRowQuery, prepared=True, prep_values=list(row), fetchall=False)
+                                except Exception as rowInsertErr:
                                     logger.error(
                                         "Skipping raid record row after insert failure: row=%s err=%s",
                                         row,
-                                        row_insert_err,
+                                        rowInsertErr,
                                     )
 
-                    if insert_gxp_deltas:
-                        query = "INSERT INTO player_delta_record VALUES " +\
-                            ','.join(f"(\'{uuid}\', \'{guild}\', {start}, 'gu_gxp', {gxp_delta})" for uuid, gxp_delta in insert_gxp_deltas)
-                        Connection.execute(query)
-                    if update_gxp_values:
-                        query = "REPLACE INTO player_global_stats VALUES " +\
-                            ','.join(f"(\'{uuid}\', 'gu_gxp', {value})" for uuid, value in update_gxp_values)
+                    if insertGxpDeltas:
+                        query = "INSERT INTO player_delta_record VALUES " + \
+                            ",".join(f"('{uuid}', '{guild}', {start}, 'gu_gxp', {gxpDelta})" for uuid, gxpDelta in insertGxpDeltas)
                         Connection.execute(query)
 
-                    if active_guild_rows:
-                        query = "REPLACE INTO guild_autotrack_active (guild, priority, level) VALUES " + \
-                            ("(%s, %s, %s),"*len(active_guild_rows))[:-1] + ';'
-                        Connection.execute(query, prepared=True, prep_values=[y for x in active_guild_rows for y in x], fetchall=False)
+                    if updateGxpValues:
+                        query = "REPLACE INTO player_global_stats VALUES " + \
+                            ",".join(f"('{uuid}', 'gu_gxp', {value})" for uuid, value in updateGxpValues)
+                        Connection.execute(query)
 
                     end = time.time()
-                    
                     await asyncio.sleep(0.3)
-                    
-                logger.info("GXP TRACKER"+f" {end-start}s")
+
+                logger.info("GXP TRACKER" + f" {end-start}s")
                 await asyncio.sleep(self.sleep)
-        
+
             logger.info("GXPTrackerTask finished")
 
         self.continuous_task = asyncio.get_event_loop().create_task(self.continuously(gxp_tracker_task))

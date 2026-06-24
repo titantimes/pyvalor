@@ -7,7 +7,7 @@ from .player_stats import PlayerStatsTask
 from .guild_tag import GuildTagTask
 from .cede_tracker import CedeTrackTask
 from .wc_players import WCPlayersTask
-from .active_guild_tracker import ActiveGuildTrackerTask
+from .guild_schedule_tracker import GuildScheduleTrackerTask
 from .season_rating_tracker import SeasonRatingTrackerTask
 from .player_last_join import PlayerLastJoinTask
 from dotenv import load_dotenv
@@ -28,9 +28,7 @@ class Heartbeat:
         GuildActivityTask(61, 300, wsconns),
         PlayerStatsTask(101, 3600),
         GuildTagTask(41, 3600),
-        # WCPlayersTask(60),
-        # cede_tracker,
-        ActiveGuildTrackerTask(29, 3600),
+        GuildScheduleTrackerTask(29, 300),
         SeasonRatingTrackerTask(223, 21600),
         PlayerLastJoinTask(31, 120)
     ]
