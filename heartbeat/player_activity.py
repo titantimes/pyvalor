@@ -7,6 +7,7 @@ from collections import defaultdict
 import time
 import datetime
 from log import logger
+from urllib.parse import quote
 
 class PlayerActivityTask(Task):
     def __init__(self, start_after, sleep):
@@ -52,7 +53,7 @@ class PlayerActivityTask(Task):
             inserts = []
 
             for guild in guildsList:
-                guild_data = await Async.get("https://api.wynncraft.com/v3/guild/" + guild)
+                guild_data = await Async.get("https://api.wynncraft.com/v3/guild/" + quote(guild, safe=''))
                 if not isinstance(guild_data, dict):
                     continue
                 guild_members = []
@@ -77,6 +78,10 @@ class PlayerActivityTask(Task):
                     continue
 
                 inserts.append(f"(\"{player_name}\", \"{guild}\", {int(time.time())}, \"{uuid}\")")
+
+            logger.info(
+                f"PLAYER ACTIVITY MATCHES online={len(online_all)} trackedMembers={len(player_to_guild)} inserts={len(inserts)}"
+            )
 
             for i in range(0, len(inserts), 32):
                 try:
