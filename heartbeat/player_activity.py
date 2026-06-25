@@ -45,6 +45,8 @@ class PlayerActivityTask(Task):
                 await asyncio.sleep(self.sleep)
                 return
 
+            logger.info(f"PLAYER ACTIVITY ONLINE players={len(online_all)}")
+
             scheduledGuilds = Connection.execute("SELECT guild, tier FROM guild_tracking_schedule")
             guildsList = [g[0] for g in scheduledGuilds] if scheduledGuilds else []
             trackedTieredGuilds = sum(1 for row in scheduledGuilds if len(row) > 1 and int(row[1]) > 0) if scheduledGuilds else 0
@@ -60,7 +62,7 @@ class PlayerActivityTask(Task):
             missingMembersPayload = 0
             totalGuildMembersSeen = 0
 
-            for guild in guildsList:
+            for idx, guild in enumerate(guildsList, start=1):
                 guild_data = await Async.get("https://api.wynncraft.com/v3/guild/" + quote(guild, safe=''))
                 if not isinstance(guild_data, dict):
                     failedGuildResponses += 1
@@ -78,6 +80,11 @@ class PlayerActivityTask(Task):
                 for member, uuid in guild_members:
                     player_to_guild[member] = guild, uuid
                 syncedGuilds.append(guild)
+
+                if idx % 10 == 0 or idx == len(guildsList):
+                    logger.info(
+                        f"PLAYER ACTIVITY FETCH PROGRESS processed={idx}/{len(guildsList)} syncedGuilds={len(syncedGuilds)} failedGuildResponses={failedGuildResponses}"
+                    )
 
             syncedGuilds = list(set(syncedGuilds))
 
