@@ -24,32 +24,6 @@ class PlayerActivityTask(Task):
 
             logger.info("PLAYER ACTIVITY TRACK START")
             start = time.time()
-            
-            onlineResponse = await Async.get("https://api.wynncraft.com/v3/player")
-            if not isinstance(onlineResponse, dict) or "players" not in onlineResponse:
-                logger.warning("PLAYER ACTIVITY TASK: invalid /v3/player response")
-                await asyncio.sleep(self.sleep)
-                return
-
-            playersData = onlineResponse["players"]
-            logger.info(f"PLAYER ACTIVITY ONLINE PAYLOAD playersType={type(playersData).__name__}")
-            if isinstance(playersData, list):
-                online_all = set(playersData)
-            elif isinstance(playersData, dict):
-                online_all = set()
-                for worldPlayers in playersData.values():
-                    if isinstance(worldPlayers, list):
-                        for playerName in worldPlayers:
-                            online_all.add(playerName)
-                    elif isinstance(worldPlayers, dict):
-                        for playerName in worldPlayers.keys():
-                            online_all.add(playerName)
-            else:
-                logger.warning("PLAYER ACTIVITY TASK: some fields are missing or some")
-                await asyncio.sleep(self.sleep)
-                return
-
-            logger.info(f"PLAYER ACTIVITY ONLINE players={len(online_all)}")
 
             scheduledGuilds = Connection.execute("SELECT guild, tier FROM guild_tracking_schedule")
             guildsList = [g[0] for g in scheduledGuilds] if scheduledGuilds else []
@@ -60,6 +34,7 @@ class PlayerActivityTask(Task):
             )
 
             player_to_guild = {}
+            online_members = set()
             syncedGuilds = []
             inserts = []
             failedGuildResponses = 0
@@ -83,6 +58,15 @@ class PlayerActivityTask(Task):
                 
                 for member, uuid in guild_members:
                     player_to_guild[member] = guild, uuid
+
+                for rank in guild_data["members"]:
+                    rankData = guild_data["members"][rank]
+                    if not isinstance(rankData, dict):
+                        continue
+                    for memberName, memberData in rankData.items():
+                        if isinstance(memberData, dict) and memberData.get("online"):
+                            online_members.add(memberName)
+
                 syncedGuilds.append(guild)
 
                 if idx % 10 == 0 or idx == len(guildsList):
@@ -92,7 +76,7 @@ class PlayerActivityTask(Task):
 
             syncedGuilds = list(set(syncedGuilds))
 
-            intersection = online_all & player_to_guild.keys()
+            intersection = online_members & player_to_guild.keys()
 
             for player_name in intersection:
                 guild, uuid = player_to_guild[player_name]
@@ -103,7 +87,7 @@ class PlayerActivityTask(Task):
                 inserts.append(f"(\"{player_name}\", \"{guild}\", {int(time.time())}, \"{uuid}\")")
 
             logger.info(
-                f"PLAYER ACTIVITY MATCHES online={len(online_all)} trackedMembers={len(player_to_guild)} inserts={len(inserts)} syncedGuilds={len(syncedGuilds)} failedGuildResponses={failedGuildResponses} missingMembersPayload={missingMembersPayload} totalGuildMembersSeen={totalGuildMembersSeen}"
+                f"PLAYER ACTIVITY MATCHES online={len(online_members)} trackedMembers={len(player_to_guild)} inserts={len(inserts)} syncedGuilds={len(syncedGuilds)} failedGuildResponses={failedGuildResponses} missingMembersPayload={missingMembersPayload} totalGuildMembersSeen={totalGuildMembersSeen}"
             )
 
             for i in range(0, len(inserts), 32):
