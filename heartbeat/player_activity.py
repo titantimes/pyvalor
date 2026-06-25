@@ -32,6 +32,7 @@ class PlayerActivityTask(Task):
                 return
 
             playersData = onlineResponse["players"]
+            logger.info(f"PLAYER ACTIVITY ONLINE PAYLOAD playersType={type(playersData).__name__}")
             if isinstance(playersData, list):
                 online_all = set(playersData)
             elif isinstance(playersData, dict):
@@ -39,6 +40,9 @@ class PlayerActivityTask(Task):
                 for worldPlayers in playersData.values():
                     if isinstance(worldPlayers, list):
                         for playerName in worldPlayers:
+                            online_all.add(playerName)
+                    elif isinstance(worldPlayers, dict):
+                        for playerName in worldPlayers.keys():
                             online_all.add(playerName)
             else:
                 logger.warning("PLAYER ACTIVITY TASK: some fields are missing or some")
