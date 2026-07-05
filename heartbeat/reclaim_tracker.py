@@ -136,6 +136,8 @@ class ReclaimTrackerTask(Task):
             recoverystart = None
             attackevents = []
             startwars = {}
+            snapshotscheduledat = 0.0
+            snapshotready = False
 
             while not self.finished:
                 logger.info("RECLAIM TRACK START")
@@ -179,7 +181,9 @@ class ReclaimTrackerTask(Task):
                     attackstart = time.time()
                     recoverystart = None
                     attackevents = []
-                    startwars = await self.fetchwarcounts()
+                    startwars = {}
+                    snapshotscheduledat = attackstart + 600
+                    snapshotready = False
 
                     for territoryname in self.targetterritories:
                         territorydata = terrres.get(territoryname)
@@ -191,6 +195,10 @@ class ReclaimTrackerTask(Task):
                     logger.info("RECLAIM ATTACK START")
 
                 if attackactive:
+                    if not snapshotready and time.time() >= snapshotscheduledat:
+                        startwars = await self.fetchwarcounts()
+                        snapshotready = True
+
                     for territoryname in self.targetterritories:
                         territorydata = terrres.get(territoryname)
                         if not isinstance(territorydata, dict):
@@ -212,11 +220,20 @@ class ReclaimTrackerTask(Task):
                             endwars = await self.fetchwarcounts()
                             durationseconds = int(time.time() - attackstart)
                             raidtype = self.classifyraid(attackevents, durationseconds)
+                            maxcontribution = len(attackevents)
+
+                            if not snapshotready:
+                                startwars = await self.fetchwarcounts()
+                                snapshotready = True
 
                             insertrows = []
                             for playeruuid, startvalue in startwars.items():
                                 endvalue = endwars.get(playeruuid, startvalue)
                                 contribution = int(endvalue) - int(startvalue)
+                                if contribution < 0:
+                                    contribution = 0
+                                if contribution > maxcontribution:
+                                    contribution = maxcontribution
                                 insertrows.append((playeruuid, contribution, durationseconds, raidtype))
 
                             if insertrows:
@@ -236,6 +253,8 @@ class ReclaimTrackerTask(Task):
                             recoverystart = None
                             attackevents = []
                             startwars = {}
+                            snapshotscheduledat = 0.0
+                            snapshotready = False
                     else:
                         recoverystart = None
 
