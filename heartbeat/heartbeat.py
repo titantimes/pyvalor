@@ -10,6 +10,7 @@ from .wc_players import WCPlayersTask
 from .guild_schedule_tracker import GuildScheduleTrackerTask
 from .season_rating_tracker import SeasonRatingTrackerTask
 from .player_last_join import PlayerLastJoinTask
+from .reclaim_tracker import ReclaimTrackerTask
 from dotenv import load_dotenv
 from log import logger
 import asyncio
@@ -31,7 +32,8 @@ class Heartbeat:
         GuildTagTask(41, 3600),
         GuildScheduleTrackerTask(29, 300),
         SeasonRatingTrackerTask(223, 21600),
-        PlayerLastJoinTask(31, 120)
+        PlayerLastJoinTask(31, 120),
+        ReclaimTrackerTask(17, 8)
     ]
     
     @staticmethod
