@@ -216,7 +216,7 @@ class ReclaimTrackerTask(Task):
                     if allowned:
                         if recoverystart is None:
                             recoverystart = time.time()
-                        elif time.time() - recoverystart >= 1200:
+                        elif time.time() - recoverystart >= 800:
                             endwars = await self.fetchwarcounts()
                             attackendstamp = int(time.time())
                             durationseconds = int(time.time() - attackstart)
