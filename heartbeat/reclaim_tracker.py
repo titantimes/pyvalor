@@ -218,6 +218,7 @@ class ReclaimTrackerTask(Task):
                             recoverystart = time.time()
                         elif time.time() - recoverystart >= 1200:
                             endwars = await self.fetchwarcounts()
+                            attackendstamp = int(time.time())
                             durationseconds = int(time.time() - attackstart)
                             raidtype = self.classifyraid(attackevents, durationseconds)
                             maxcontribution = len(attackevents)
@@ -234,7 +235,8 @@ class ReclaimTrackerTask(Task):
                                     contribution = 0
                                 if contribution > maxcontribution:
                                     contribution = maxcontribution
-                                insertrows.append((playeruuid, contribution, durationseconds, raidtype))
+                                if contribution > 0:
+                                    insertrows.append((playeruuid, contribution, attackendstamp, raidtype))
 
                             if insertrows:
                                 query = "INSERT INTO ano_reclaim_records (uuid, contribution, `time`, raid_type) VALUES " + \
