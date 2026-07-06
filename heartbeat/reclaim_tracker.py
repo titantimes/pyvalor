@@ -138,10 +138,49 @@ class ReclaimTrackerTask(Task):
             startwars = {}
             snapshotscheduledat = 0.0
             snapshotready = False
+            fallbackdelayseconds = 300
+            fallbackevents = []
 
             while not self.finished:
                 logger.info("RECLAIM TRACK START")
                 loopstart = time.time()
+
+                if len(fallbackevents) > 0:
+                    remainingfallbacks = []
+                    for fallbackevent in fallbackevents:
+                        if time.time() < fallbackevent["checkat"]:
+                            remainingfallbacks.append(fallbackevent)
+                            continue
+
+                        latewars = await self.fetchwarcounts()
+                        if len(latewars) == 0:
+                            remainingfallbacks.append(fallbackevent)
+                            continue
+
+                        laterows = []
+                        for playeruuid, startvalue in fallbackevent["startwars"].items():
+                            if playeruuid in fallbackevent["inserteduuids"]:
+                                continue
+
+                            endvalue = latewars.get(playeruuid, startvalue)
+                            contribution = int(endvalue) - int(startvalue)
+                            if contribution < 0:
+                                contribution = 0
+                            if contribution > fallbackevent["maxcontribution"]:
+                                contribution = fallbackevent["maxcontribution"]
+
+                            if contribution > 0:
+                                laterows.append((playeruuid, contribution, fallbackevent["attackendstamp"], fallbackevent["raidtype"]))
+
+                        if laterows:
+                            query = "INSERT INTO ano_reclaim_records (uuid, contribution, `time`, raid_type) VALUES " + \
+                                ",".join(["(%s, %s, %s, %s)"] * len(laterows))
+                            flatvalues = []
+                            for row in laterows:
+                                flatvalues.extend(row)
+                            Connection.execute(query, prep_values=flatvalues, fetchall=False)
+
+                    fallbackevents = remainingfallbacks
 
                 terrres = await Async.get("https://api.wynncraft.com/v3/guild/list/territory")
                 if not isinstance(terrres, dict):
@@ -216,7 +255,7 @@ class ReclaimTrackerTask(Task):
                     if allowned:
                         if recoverystart is None:
                             recoverystart = time.time()
-                        elif time.time() - recoverystart >= 800:
+                        elif time.time() - recoverystart >= 1200:
                             endwars = await self.fetchwarcounts()
                             attackendstamp = int(time.time())
                             durationseconds = int(time.time() - attackstart)
@@ -245,6 +284,16 @@ class ReclaimTrackerTask(Task):
                                 for row in insertrows:
                                     flatvalues.extend(row)
                                 Connection.execute(query, prep_values=flatvalues, fetchall=False)
+
+                            inserteduuids = {row[0] for row in insertrows}
+                            fallbackevents.append({
+                                "checkat": time.time() + fallbackdelayseconds,
+                                "startwars": dict(startwars),
+                                "maxcontribution": maxcontribution,
+                                "raidtype": raidtype,
+                                "attackendstamp": attackendstamp,
+                                "inserteduuids": inserteduuids,
+                            })
 
                             logger.info(
                                 f"leave this here for now while i see if it works duration={durationseconds} raidtype={raidtype} territories={len(attackevents)}"
