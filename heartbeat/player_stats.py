@@ -451,6 +451,7 @@ class PlayerStatsTask(Task):
                 if raid_count != old_raid_count:
                     raid_delta = raid_count - old_raid_count
                     curr_time = time.time()
+                    has_new_raid_data = True
 
                     if raid_delta > 0:
                         if raid_delta >= PlayerStatsTask.warsmooththresh:
@@ -459,12 +460,10 @@ class PlayerStatsTask(Task):
                             inserts_graid_deltas.extend(smoothed_graid_deltas)
                         else:
                             inserts_graid_deltas.append((uuid, guild, curr_time, raid_name, raid_delta))
-                        has_new_raid_data = True
                         raid_update_row.append(raid_count)
                     else:
-                        # count went down — bad API data, preserve stored value to avoid corrupting the baseline
-                        logger.warning(f"graid count decreased for {uuid} {raid_name}: {old_raid_count} -> {raid_count}, skipping cumu update")
-                        raid_update_row.append(old_raid_count)
+                        logger.warning(f"graid count decreased for {uuid} {raid_name}: {old_raid_count} -> {raid_count}, updating cumu without delta")
+                        raid_update_row.append(raid_count)
                 else:
                     raid_update_row.append(raid_count)
             else:
