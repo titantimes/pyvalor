@@ -119,7 +119,7 @@ class ReclaimTrackerTask(Task):
             return "snake"
 
         outofpoolterritories = uniquelost - self.smallsnakepool
-        if len(outofpoolterritories) >= 2:
+        if len(outofpoolterritories) >= 1:
             return "big"
 
         return "unknown"
