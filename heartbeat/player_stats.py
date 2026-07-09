@@ -338,6 +338,18 @@ class PlayerStatsTask(Task):
         guild = stats.get("guild", {}).get("name") if stats.get("guild") else None
         guild_rank = stats.get("guild", {}).get("rank") if stats.get("guild") else None
         old_guild, old_rank = old_membership.get(uuid, [None, None])
+
+        if old_guild is None:
+            latest_guild_log = Connection.execute(
+                "SELECT joined FROM guild_join_log WHERE uuid = %s ORDER BY date DESC LIMIT 1",
+                prep_values=[uuid],
+            )
+            if latest_guild_log:
+                old_guild = latest_guild_log[0][0]
+
+        if old_guild == "None":
+            old_guild = None
+
         if guild != old_guild:
             inserts_guild_log.append(f"('{uuid}', '{old_guild}', '{old_rank}', '{guild}', {int(time.time())})")
 
