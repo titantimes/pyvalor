@@ -100,8 +100,11 @@ class ReclaimTrackerTask(Task):
                     warmap[memberuuid] = int(memberwars)
         return warmap
 
-    def classifyraid(self, lostevents, durationseconds):
+    def classifyraid(self, lostevents, durationseconds, reclaimstarted):
         uniquelost = set(lostevents)
+
+        if reclaimstarted:
+            return "reclaim"
 
         if self.snipeterritory and self.snipeterritory in uniquelost:
             uniquelostcount = len(uniquelost)
@@ -140,6 +143,9 @@ class ReclaimTrackerTask(Task):
             snapshotready = False
             fallbackdelayseconds = 300
             fallbackevents = []
+            firstreclaimat = None
+            fullwipehit = False
+            reclaimstarted = False
 
             while not self.finished:
                 logger.info("RECLAIM TRACK START")
@@ -205,12 +211,15 @@ class ReclaimTrackerTask(Task):
 
                 anylost = False
                 allowned = True
+                ownedcount = 0
                 for territoryname in self.targetterritories:
                     territorydata = terrres.get(territoryname)
                     if not isinstance(territorydata, dict):
                         allowned = False
                         continue
                     isowned = self.isanoowner(territorydata.get("guild", {}))
+                    if isowned:
+                        ownedcount += 1
                     if not isowned:
                         anylost = True
                         allowned = False
@@ -223,6 +232,9 @@ class ReclaimTrackerTask(Task):
                     startwars = {}
                     snapshotscheduledat = attackstart + 600
                     snapshotready = False
+                    firstreclaimat = None
+                    fullwipehit = ownedcount == 0
+                    reclaimstarted = False
 
                     for territoryname in self.targetterritories:
                         territorydata = terrres.get(territoryname)
@@ -234,6 +246,11 @@ class ReclaimTrackerTask(Task):
                     logger.info("RECLAIM ATTACK START")
 
                 if attackactive:
+                    if ownedcount == 0:
+                        fullwipehit = True
+                    if fullwipehit and ownedcount > 0:
+                        reclaimstarted = True
+
                     if not snapshotready and time.time() >= snapshotscheduledat:
                         startwars = await self.fetchwarcounts()
                         snapshotready = True
@@ -251,6 +268,8 @@ class ReclaimTrackerTask(Task):
 
                         if wasano and not nowano:
                             attackevents.append(territoryname)
+                        if not wasano and nowano and firstreclaimat is None:
+                            firstreclaimat = time.time()
 
                     if allowned:
                         if recoverystart is None:
@@ -259,7 +278,10 @@ class ReclaimTrackerTask(Task):
                             endwars = await self.fetchwarcounts()
                             attackendstamp = int(time.time())
                             durationseconds = int(time.time() - attackstart)
-                            raidtype = self.classifyraid(attackevents, durationseconds)
+                            classtime = durationseconds
+                            if firstreclaimat is not None:
+                                classtime = int(time.time() - firstreclaimat)
+                            raidtype = self.classifyraid(attackevents, classtime, reclaimstarted)
                             maxcontribution = len(attackevents)
 
                             if not snapshotready:
@@ -306,6 +328,9 @@ class ReclaimTrackerTask(Task):
                             startwars = {}
                             snapshotscheduledat = 0.0
                             snapshotready = False
+                            firstreclaimat = None
+                            fullwipehit = False
+                            reclaimstarted = False
                     else:
                         recoverystart = None
 
