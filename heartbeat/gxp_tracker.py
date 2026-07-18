@@ -11,6 +11,10 @@ from log import logger
 import traceback
 
 gxpLevelExceptions = ["Titans Valor", "The Aquarium", "Avicia", "Empire of Sindria", "KongoBoys", "Paladins United", "Nerfuria", "Eden", "Idiot Co", "Hesperides", "The Broken Gasmask", "Anime Lovers", "TruthSworD", "Empire of TKW", "Black Fangs", "Profession Heaven", "Chiefs Of Corkus", "Cirrus", "HackForums", "Emorians", "The Simple Ones", "Sins of Seedia", "IceBlue Team", "Polish Hussars"]
+guildPollIntervals = {
+    "Titans Valor": 60,
+}
+defaultGuildPollInterval = 300
 
 class GXPTrackerTask(Task):
     def __init__(self, start_after, sleep):
@@ -42,6 +46,7 @@ class GXPTrackerTask(Task):
 
         async def gxp_tracker_task():
             await asyncio.sleep(self.start_after)
+            guildLastPolledAt = {}
 
             while not self.finished:
                 logger.info("GXP START")
@@ -61,10 +66,15 @@ class GXPTrackerTask(Task):
                     prevMemberGxps[uuid] = value
 
                 for guild in guildList:
+                    pollInterval = guildPollIntervals.get(guild, defaultGuildPollInterval)
+                    if start - guildLastPolledAt.get(guild, 0) < pollInterval:
+                        continue
+
                     guildUrl = f"https://api.wynncraft.com/v3/guild/{guild}"
                     guildData = await Async.get(guildUrl)
                     if guildData is None or "members" not in guildData or "level" not in guildData:
                         continue
+                    guildLastPolledAt[guild] = start
 
                     guildLevel = guildData["level"]
                     guildPercent = guildData["xpPercent"] * 0.01
