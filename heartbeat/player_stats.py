@@ -70,6 +70,12 @@ class PlayerStatsTask(Task):
         return x
 
     @staticmethod
+    def sql_escape(value):
+        if value is None:
+            return "None"
+        return str(value).replace("'", "''")
+
+    @staticmethod
     def normalise_raid_name(raid_name: str) -> str:
         return "The Wartorn Palace" if raid_name == "unknown" else raid_name #while wtp is called unknwon in the api 
 
@@ -459,7 +465,7 @@ class PlayerStatsTask(Task):
             raid_count = PlayerStatsTask.null_or_value(graids.get(raid_name, 0))
             
             if uuid in prev_graidcounts and raid_name in prev_graidcounts[uuid]:
-                old_raid_count = prev_graidcounts[uuid][raid_name]
+                old_raid_count = PlayerStatsTask.null_or_value(prev_graidcounts[uuid][raid_name])
                 if raid_count != old_raid_count:
                     raid_delta = raid_count - old_raid_count
                     curr_time = time.time()
@@ -591,7 +597,7 @@ class PlayerStatsTask(Task):
 
         if inserts_graid_update:
             try:
-                query_graids_update  = "REPLACE INTO cumu_graids VALUES " + ','.join(f"(\'{uuid}\', {curr_time}, {tcc}, {onol}, {notg}, {tna}, {twp}, \'{guild}\')" 
+                query_graids_update  = "REPLACE INTO cumu_graids VALUES " + ','.join(f"(\'{uuid}\', {curr_time}, {tcc}, {onol}, {notg}, {tna}, {twp}, \'{PlayerStatsTask.sql_escape(guild)}\')" 
                                                                                         for uuid, tcc, onol, notg, tna, twp, guild in inserts_graid_update)
                 Connection.execute(query_graids_update)
             except Exception as e:
@@ -599,7 +605,7 @@ class PlayerStatsTask(Task):
 
         if inserts_graid_deltas:
             try:
-                query_graids_delta  = "INSERT INTO delta_graids VALUES " + ','.join(f"(\'{uuid}\', {ts}, " + '"'+raid_type+'"' + f", {graiddiff}, \'{guild}\')" 
+                query_graids_delta  = "INSERT INTO delta_graids VALUES " + ','.join(f"(\'{uuid}\', {ts}, " + '"'+raid_type+'"' + f", {graiddiff}, \'{PlayerStatsTask.sql_escape(guild)}\')" 
                                                             for uuid, guild, ts, raid_type, graiddiff in inserts_graid_deltas)
                 Connection.execute(query_graids_delta)
             except Exception as e:
@@ -665,7 +671,34 @@ class PlayerStatsTask(Task):
                 while player_idx < len(search_players):
                     try:
                         player = search_players[player_idx]
-                        await PlayerStatsTask.track_player(player, old_membership, prev_warcounts, prev_graidcounts, old_global_data, inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats)
+                        player_inserts_war_update, player_inserts_war_deltas, player_inserts_graid_update, player_inserts_graid_deltas, player_inserts_guild_log, player_inserts, player_uuid_name, player_update_player_global_stats, player_deltas_player_global_stats = PlayerStatsTask.get_empty_stats_track_buffers()
+
+                        await PlayerStatsTask.track_player(
+                            player,
+                            old_membership,
+                            prev_warcounts,
+                            prev_graidcounts,
+                            old_global_data,
+                            player_inserts_war_update,
+                            player_inserts_war_deltas,
+                            player_inserts_graid_update,
+                            player_inserts_graid_deltas,
+                            player_inserts_guild_log,
+                            player_inserts,
+                            player_uuid_name,
+                            player_update_player_global_stats,
+                            player_deltas_player_global_stats,
+                        )
+
+                        inserts_war_update.extend(player_inserts_war_update)
+                        inserts_war_deltas.extend(player_inserts_war_deltas)
+                        inserts_graid_update.extend(player_inserts_graid_update)
+                        inserts_graid_deltas.extend(player_inserts_graid_deltas)
+                        inserts_guild_log.extend(player_inserts_guild_log)
+                        inserts.extend(player_inserts)
+                        uuid_name.extend(player_uuid_name)
+                        update_player_global_stats.extend(player_update_player_global_stats)
+                        deltas_player_global_stats.extend(player_deltas_player_global_stats)
                         cnt += 1
 
                         if (cnt % 10 == 0 or player_idx == len(search_players)-1):
@@ -677,17 +710,7 @@ class PlayerStatsTask(Task):
                     except Exception as e:
                         logger.info(f"PLAYER STATS TASK ERROR")
                         logger.exception(e)
-                        inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats = PlayerStatsTask.get_empty_stats_track_buffers()
                         print(f"PLAYER IS {search_players[player_idx]}")
-                        inserts_war_update.clear()
-                        inserts_war_deltas.clear()
-                        inserts_graid_update.clear()
-                        inserts_graid_deltas.clear()
-                        inserts_guild_log.clear()
-                        inserts.clear()
-                        uuid_name.clear()
-                        update_player_global_stats.clear()
-                        deltas_player_global_stats.clear()
                     
                     player_idx += 1
 
