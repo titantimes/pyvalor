@@ -509,7 +509,7 @@ class PlayerStatsTask(Task):
         online_all = online_all - set(already_uuid)
 
         queued_players = [] # is this used? [x[0] for x in Connection.execute("SELECT uuid FROM player_stats_queue")]
-        search_players = list(online_all | set(queued_players))[::-1]
+        search_players = list(online_all | set(queued_players) | set(already_uuid))[::-1]
 
         # search_players_clause = '(' + ','.join(f'"{name}"' for name in online_all) + ')'
         search_players_clause = '(' + ('%s,'*len(online_all))[:-1] + ')'
