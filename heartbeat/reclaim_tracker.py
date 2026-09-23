@@ -62,13 +62,36 @@ class ReclaimTrackerTask(Task):
         ])
 
         self.snipeterritory = "Nodguj Nation"
-
         self.wipestarterterritory = "Nodguj Nation"
         self.wipeminterritories = 11
+        self.excludedseasonnames = ("all", "not_season_69")
+        self.offseasonpollseconds = 60
+        self.season_active = False
+        self.season_next_check = 0.0
 
     def stop(self):
         self.finished = True
         self.continuous_task.cancel()
+
+    def isinseasonnow(self):
+        now = time.time()
+        if now < self.season_next_check:
+            return self.season_active
+
+        res = Connection.execute(
+            "SELECT end_time FROM season_list "
+            "WHERE season_name NOT IN (%s, %s) AND start_time <= %s AND end_time >= %s "
+            "ORDER BY start_time DESC LIMIT 1",
+            prep_values=[self.excludedseasonnames[0], self.excludedseasonnames[1], now, now])
+
+        if res:
+            self.season_active = True
+            self.season_next_check = res[0][0]
+        else:
+            self.season_active = False
+            self.season_next_check = now + self.offseasonpollseconds
+
+        return self.season_active
 
     def isanoowner(self, guilddata):
         if not isinstance(guilddata, dict):
@@ -151,6 +174,10 @@ class ReclaimTrackerTask(Task):
                 logger.info("RECLAIM TRACK START")
                 loopstart = time.time()
 
+                wasinseason = self.season_active
+                inseason = self.isinseasonnow()
+                seasonjustended = wasinseason and not inseason
+
                 if len(fallbackevents) > 0:
                     remainingfallbacks = []
                     for fallbackevent in fallbackevents:
@@ -224,7 +251,7 @@ class ReclaimTrackerTask(Task):
                         anylost = True
                         allowned = False
 
-                if not attackactive and anylost:
+                if inseason and not attackactive and anylost:
                     attackactive = True
                     attackstart = time.time()
                     recoverystart = None
@@ -271,68 +298,75 @@ class ReclaimTrackerTask(Task):
                         if not wasano and nowano and firstreclaimat is None:
                             firstreclaimat = time.time()
 
+                    shouldfinalize = False
                     if allowned:
                         if recoverystart is None:
                             recoverystart = time.time()
                         elif time.time() - recoverystart >= 1200:
-                            endwars = await self.fetchwarcounts()
-                            attackendstamp = int(time.time())
-                            durationseconds = int(time.time() - attackstart)
-                            classtime = durationseconds
-                            if firstreclaimat is not None:
-                                classtime = int(time.time() - firstreclaimat)
-                            raidtype = self.classifyraid(attackevents, classtime, reclaimstarted)
-                            maxcontribution = len(attackevents)
-
-                            if not snapshotready:
-                                startwars = await self.fetchwarcounts()
-                                snapshotready = True
-
-                            insertrows = []
-                            for playeruuid, startvalue in startwars.items():
-                                endvalue = endwars.get(playeruuid, startvalue)
-                                contribution = int(endvalue) - int(startvalue)
-                                if contribution < 0:
-                                    contribution = 0
-                                if contribution > maxcontribution:
-                                    contribution = maxcontribution
-                                if contribution > 0:
-                                    insertrows.append((playeruuid, contribution, attackendstamp, raidtype))
-
-                            if insertrows:
-                                query = "INSERT INTO ano_reclaim_records (uuid, contribution, `time`, raid_type) VALUES " + \
-                                    ",".join(["(%s, %s, %s, %s)"] * len(insertrows))
-                                flatvalues = []
-                                for row in insertrows:
-                                    flatvalues.extend(row)
-                                Connection.execute(query, prep_values=flatvalues, fetchall=False)
-
-                            inserteduuids = {row[0] for row in insertrows}
-                            fallbackevents.append({
-                                "checkat": time.time() + fallbackdelayseconds,
-                                "startwars": dict(startwars),
-                                "maxcontribution": maxcontribution,
-                                "raidtype": raidtype,
-                                "attackendstamp": attackendstamp,
-                                "inserteduuids": inserteduuids,
-                            })
-
-                            logger.info(
-                                f"leave this here for now while i see if it works duration={durationseconds} raidtype={raidtype} territories={len(attackevents)}"
-                            )
-
-                            attackactive = False
-                            attackstart = 0.0
-                            recoverystart = None
-                            attackevents = []
-                            startwars = {}
-                            snapshotscheduledat = 0.0
-                            snapshotready = False
-                            firstreclaimat = None
-                            fullwipehit = False
-                            reclaimstarted = False
+                            shouldfinalize = True
                     else:
                         recoverystart = None
+
+                    if seasonjustended:
+                        shouldfinalize = True
+
+                    if shouldfinalize:
+                        endwars = await self.fetchwarcounts()
+                        attackendstamp = int(time.time())
+                        durationseconds = int(time.time() - attackstart)
+                        classtime = durationseconds
+                        if firstreclaimat is not None:
+                            classtime = int(time.time() - firstreclaimat)
+                        raidtype = self.classifyraid(attackevents, classtime, reclaimstarted)
+                        maxcontribution = len(attackevents)
+
+                        if not snapshotready:
+                            startwars = await self.fetchwarcounts()
+                            snapshotready = True
+
+                        insertrows = []
+                        for playeruuid, startvalue in startwars.items():
+                            endvalue = endwars.get(playeruuid, startvalue)
+                            contribution = int(endvalue) - int(startvalue)
+                            if contribution < 0:
+                                contribution = 0
+                            if contribution > maxcontribution:
+                                contribution = maxcontribution
+                            if contribution > 0:
+                                insertrows.append((playeruuid, contribution, attackendstamp, raidtype))
+
+                        if insertrows:
+                            query = "INSERT INTO ano_reclaim_records (uuid, contribution, `time`, raid_type) VALUES " + \
+                                ",".join(["(%s, %s, %s, %s)"] * len(insertrows))
+                            flatvalues = []
+                            for row in insertrows:
+                                flatvalues.extend(row)
+                            Connection.execute(query, prep_values=flatvalues, fetchall=False)
+
+                        inserteduuids = {row[0] for row in insertrows}
+                        fallbackevents.append({
+                            "checkat": time.time() + fallbackdelayseconds,
+                            "startwars": dict(startwars),
+                            "maxcontribution": maxcontribution,
+                            "raidtype": raidtype,
+                            "attackendstamp": attackendstamp,
+                            "inserteduuids": inserteduuids,
+                        })
+
+                        logger.info(
+                            f"leave this here for now while i see if it works duration={durationseconds} raidtype={raidtype} territories={len(attackevents)}"
+                        )
+
+                        attackactive = False
+                        attackstart = 0.0
+                        recoverystart = None
+                        attackevents = []
+                        startwars = {}
+                        snapshotscheduledat = 0.0
+                        snapshotready = False
+                        firstreclaimat = None
+                        fullwipehit = False
+                        reclaimstarted = False
 
                 prevowners = dict(currentowners)
 
