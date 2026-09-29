@@ -60,3 +60,26 @@ class Connection:
                 cursor.fetchall()
         cls.conn.commit()
         cursor.close()
+
+
+    @classmethod
+    def execute_transaction(cls, statements):
+        if time.time() - cls.last_connected > cls.connection_live:
+            cls.conn.close()
+            cls.conn = mysql.connector.connect(**cls._info)
+            cls.last_connected = time.time()
+        while not cls.conn.is_connected():
+            logging.info("DB disconnected. Now reconnecting")
+            cls.conn = mysql.connector.connect(**cls._info)
+            cls.last_connected = time.time()
+
+        cursor = cls.conn.cursor()
+        try:
+            for query, values in statements:
+                cursor.execute(query, values)
+            cls.conn.commit()
+        except Exception:
+            cls.conn.rollback()
+            raise
+        finally:
+            cursor.close()
