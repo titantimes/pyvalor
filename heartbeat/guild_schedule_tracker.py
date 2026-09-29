@@ -27,6 +27,16 @@ class GuildScheduleTrackerTask(Task):
             return 1
         return 0
 
+    @staticmethod
+    def getTierFromWars(dailyWars):
+        if dailyWars >= 400:
+            return 3
+        elif dailyWars >= 200:
+            return 2
+        elif dailyWars >= 100:
+            return 1
+        return 0
+
     def stop(self):
         self.finished = True
         self.continuous_task.cancel()
@@ -51,6 +61,18 @@ GROUP BY guild
 """
                     graidResults = Connection.execute(graidQuery, prep_values=[oneDayAgo])
 
+                    warQuery = """
+SELECT guild, SUM(delta) as dailyWars
+FROM player_delta_record
+WHERE label = 'g_wars'
+    AND time >= %s
+    AND guild IS NOT NULL
+    AND guild != ''
+    AND guild != 'None'
+GROUP BY guild
+"""
+                    warResults = Connection.execute(warQuery, prep_values=[oneDayAgo])
+
                     twoDayQuery = """
 SELECT guild, SUM(graidcount_diff) as twoDayGraids
 FROM delta_graids
@@ -67,30 +89,28 @@ GROUP BY guild
                         tier = self.getTierFromGraids(dailyGraids) if guild else 0
                         guildTierMap[guild] = (tier, dailyGraids)
 
+                    warTierMap = {}
+                    for guild, dailyWars in warResults:
+                        if guild:
+                            warTierMap[guild] = self.getTierFromWars(dailyWars)
+
                     twoDayMap = {}
                     for guild, twoDayGraids in twoDayResults:
                         twoDayMap[guild] = twoDayGraids
 
-                    guildList = list(set(guildTierMap.keys()) | set(twoDayMap.keys()) | set(gxpLevelExceptions) | set(graidExceptions.keys()) | set(existingGuilds))
+                    guildList = list(set(guildTierMap.keys()) | set(twoDayMap.keys()) | set(warTierMap.keys()) | set(gxpLevelExceptions) | set(graidExceptions.keys()) | set(existingGuilds))
 
                     now = int(start)
                     upserts = []
 
                     for guild in guildList:
-                        if guild in gxpLevelExceptions:
-                            tier = 3
-                            dailyGraids = guildTierMap[guild][1] if guild in guildTierMap else 0
-                        elif guild in graidExceptions:
-                            tier = graidExceptions[guild]
-                            dailyGraids = 0
-                        elif guild in guildTierMap:
-                            tier, dailyGraids = guildTierMap[guild]
-                        elif twoDayMap.get(guild, 0) >= 100:
-                            tier = 1
-                            dailyGraids = 0
-                        else:
-                            tier = 0
-                            dailyGraids = 0
+                        dailyGraids = guildTierMap.get(guild, (0, 0))[1]
+                        graidTier = guildTierMap.get(guild, (0, 0))[0]
+                        if guild not in guildTierMap and twoDayMap.get(guild, 0) >= 100:
+                            graidTier = 1
+
+                        forcedTier = 3 if guild in gxpLevelExceptions else graidExceptions.get(guild, 0)
+                        tier = max(graidTier, warTierMap.get(guild, 0), forcedTier)
 
                         if tier > 0:
                             interval = tierIntervals.get(tier, 1800)
