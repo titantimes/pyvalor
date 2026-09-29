@@ -3,6 +3,7 @@ import aiohttp
 from db import Connection
 from network import Async
 from .task import Task
+from .history_rollup import rollup_one_eligible_day
 from collections import defaultdict
 import time
 import datetime
@@ -72,7 +73,7 @@ class PlayerActivityTask(Task):
 
             for i in range(0, len(inserts), 32):
                 try:
-                    Connection.execute(f"INSERT INTO activity_members VALUES {','.join(inserts[i:i+32])}")
+                    Connection.execute(f"INSERT INTO activity_members (name, guild, timestamp, uuid) VALUES {','.join(inserts[i:i+32])}")
                 except Exception as e:
                     logger.info(f"PLAYER ACTIVITY TASK ERROR")
                     logger.exception(e)
@@ -81,6 +82,10 @@ class PlayerActivityTask(Task):
 
             end = time.time()
             logger.info("PLAYER ACTIVITY TASK"+f" {end-start}s")
+
+            rolled = rollup_one_eligible_day(end)
+            if rolled:
+                logger.info(f"HISTORY ROLLUP: processed {rolled}")
             
             await asyncio.sleep(self.sleep)
 
