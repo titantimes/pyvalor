@@ -796,9 +796,9 @@ class PlayerStatsTask(Task):
 
         if deltas_player_global_stats:
             try:
-                query_global_delta  = "INSERT INTO player_delta_record VALUES " + ','.join(f"(\'{uuid}\',\'{guild}\', {now}, " + '"'+feat_name+'"' + f", {delta_val})" 
-                                                            for uuid, guild, now, feat_name, delta_val in deltas_player_global_stats)
-                Connection.execute(query_global_delta)
+                query_global_delta = "INSERT INTO player_delta_record (uuid, guild, time, label, delta) VALUES " + ",".join(["(%s, %s, %s, %s, %s)"] * len(deltas_player_global_stats))
+                delta_values = [value for row in deltas_player_global_stats for value in row]
+                Connection.execute(query_global_delta, prep_values=delta_values, fetchall=False)
             except Exception as e:
                 logger.error(f"write_results_to_db: global delta failed: {e}")
 
