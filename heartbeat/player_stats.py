@@ -531,7 +531,11 @@ class PlayerStatsTask(Task):
         return True
 
     @staticmethod
-    async def track_guild_roster(roster_members):
+    async def track_guild_roster(roster_members, fetched_guilds):
+        fetched_guilds = {guild for guild in fetched_guilds if isinstance(guild, str) and guild}
+        if not fetched_guilds and not roster_members:
+            return 0
+
         members_by_uuid = {}
         for guild, guild_rank, member_name, member_data in roster_members:
             if not isinstance(member_data, dict):
@@ -542,16 +546,29 @@ class PlayerStatsTask(Task):
                 continue
             members_by_uuid[uuid] = (guild, guild_rank, username, member_data)
 
-        if not members_by_uuid:
-            return 0
+        fetched_guild_list = list(fetched_guilds)
+        prior_memberships = []
+        for offset in range(0, len(fetched_guild_list), 500):
+            guild_batch = fetched_guild_list[offset:offset + 500]
+            placeholders = ",".join(["%s"] * len(guild_batch))
+            prior_memberships.extend(Connection.execute(
+                f"SELECT uuid, guild, guild_rank FROM player_stats WHERE guild IN ({placeholders})",
+                prep_values=guild_batch,
+            ))
+        prior_memberships_by_uuid = {uuid: (guild, guild_rank) for uuid, guild, guild_rank in prior_memberships}
 
-        _, old_membership, _, prev_graidcounts, old_global_data = await PlayerStatsTask.get_stats_track_references(
-            needs_player_list=False,
-            force_player_list=list(members_by_uuid),
-        )
+        if members_by_uuid:
+            _, old_membership, _, prev_graidcounts, old_global_data = await PlayerStatsTask.get_stats_track_references(
+                needs_player_list=False,
+                force_player_list=list(members_by_uuid),
+            )
+        else:
+            old_membership, prev_graidcounts, old_global_data = {}, {}, {}
         inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats = PlayerStatsTask.get_empty_stats_track_buffers()
 
+        membership_updates = {}
         for uuid, (guild, guild_rank, username, member_data) in members_by_uuid.items():
+            membership_updates.setdefault((guild, guild_rank), []).append(uuid)
             global_data = member_data.get("globalData")
             if not isinstance(global_data, dict):
                 global_data = {}
@@ -594,6 +611,53 @@ class PlayerStatsTask(Task):
             )
             uuid_name.append((uuid, username))
 
+        departed_members = [
+            (uuid, guild, guild_rank)
+            for uuid, (guild, guild_rank) in prior_memberships_by_uuid.items()
+            if uuid not in members_by_uuid
+        ]
+        for uuid, old_guild, old_rank in departed_members:
+            inserts_guild_log.append(
+                f"('{uuid}', '{PlayerStatsTask.sql_escape(old_guild)}', '{PlayerStatsTask.sql_escape(old_rank)}', 'None', {int(time.time())})"
+            )
+
+        departed_by_guild = {}
+        for uuid, guild, _ in departed_members:
+            departed_by_guild.setdefault(guild, []).append(uuid)
+
+        membership_queries = []
+        for guild, uuids in departed_by_guild.items():
+            for offset in range(0, len(uuids), 500):
+                uuid_batch = uuids[offset:offset + 500]
+                quoted_uuids = ",".join(f"'{PlayerStatsTask.sql_escape(uuid)}'" for uuid in uuid_batch)
+                quoted_guild = PlayerStatsTask.sql_escape(guild)
+                membership_queries.append(
+                    f"UPDATE player_stats SET guild = 'None', guild_rank = 'None' WHERE guild = '{quoted_guild}' AND uuid IN ({quoted_uuids})"
+                )
+                membership_queries.append(
+                    f"UPDATE cumu_graids SET guild = 'None' WHERE guild = '{quoted_guild}' AND uuid IN ({quoted_uuids})"
+                )
+
+        for (guild, guild_rank), uuids in membership_updates.items():
+            quoted_guild = PlayerStatsTask.sql_escape(guild)
+            quoted_rank = PlayerStatsTask.sql_escape(guild_rank)
+            for offset in range(0, len(uuids), 500):
+                uuid_batch = uuids[offset:offset + 500]
+                quoted_uuids = ",".join(f"'{PlayerStatsTask.sql_escape(uuid)}'" for uuid in uuid_batch)
+                membership_queries.append(
+                    f"UPDATE player_stats SET guild = '{quoted_guild}', guild_rank = '{quoted_rank}' WHERE uuid IN ({quoted_uuids})"
+                )
+                membership_queries.append(
+                    f"UPDATE cumu_graids SET guild = '{quoted_guild}' WHERE uuid IN ({quoted_uuids})"
+                )
+
+        if inserts_guild_log:
+            membership_queries.append("INSERT INTO guild_join_log VALUES " + ",".join(inserts_guild_log))
+
+        if membership_queries:
+            Connection.exec_all(membership_queries)
+            inserts_guild_log.clear()
+
         PlayerStatsTask.write_results_to_db(
             inserts_war_update,
             inserts_war_deltas,
@@ -605,7 +669,7 @@ class PlayerStatsTask(Task):
             update_player_global_stats,
             deltas_player_global_stats,
         )
-        return len(members_by_uuid)
+        return len(members_by_uuid) + len(departed_members)
 
     @staticmethod
     async def get_stats_track_references(needs_player_list=True, force_player_list=[]):
