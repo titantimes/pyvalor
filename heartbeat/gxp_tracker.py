@@ -3,6 +3,7 @@ import aiohttp
 from db import Connection
 from network import Async
 from .task import Task
+from .player_stats import PlayerStatsTask
 import datetime
 import time
 import sys
@@ -52,6 +53,7 @@ class GXPTrackerTask(Task):
                 logger.info("GXP START")
                 start = time.time()
                 end = start
+                guildRosterSnapshots = []
 
                 guildRows = Connection.execute("SELECT guild FROM guild_tracking_schedule ORDER BY tier DESC, dailyGraids DESC;")
                 guildList = [g[0] for g in guildRows] if guildRows else []
@@ -98,6 +100,20 @@ class GXPTrackerTask(Task):
                         for memberName in guildData["members"][rank]:
                             memberFields = guildData["members"][rank][memberName]
                             members.append({"name": memberName, **memberFields})
+                            memberGlobalData = memberFields.get("globalData")
+                            if isinstance(memberGlobalData, dict):
+                                rosterGlobalData = {
+                                    key: memberGlobalData[key]
+                                    for key in ("wars", "totalLevel", "mobsKilled", "chestsFound", "completedQuests", "dungeons", "raids", "pvp", "guildRaids")
+                                    if key in memberGlobalData
+                                }
+                            else:
+                                rosterGlobalData = {}
+                            guildRosterSnapshots.append((guild, rank, memberName, {
+                                "uuid": memberFields.get("uuid"),
+                                "legacyName": memberFields.get("legacyName"),
+                                "globalData": rosterGlobalData,
+                            }))
                             gxpDelta = memberFields["contributed"] - prevMemberGxps.get(memberFields["uuid"], memberFields["contributed"])
                             updateGxpValues.append((memberFields["uuid"], memberFields["contributed"]))
                             if gxpDelta > 0:
@@ -170,6 +186,10 @@ class GXPTrackerTask(Task):
 
                     end = time.time()
                     await asyncio.sleep(0.3)
+
+                updatedRosterMembers = await PlayerStatsTask.track_guild_roster(guildRosterSnapshots)
+                if updatedRosterMembers:
+                    logger.info(f"GUILD ROSTER PLAYER STATS: processed {updatedRosterMembers} member snapshots")
 
                 logger.info("GXP TRACKER" + f" {end-start}s")
                 await asyncio.sleep(self.sleep)
