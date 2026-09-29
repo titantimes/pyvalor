@@ -3,7 +3,10 @@ import datetime
 
 from db import Connection
 
+
 SECONDS_PER_DAY = 86400
+
+
 def _three_month_cutoff(now: float) -> int:
 	current = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
 	month_index = current.year * 12 + current.month - 1 - 3
@@ -49,7 +52,7 @@ def _rollup_activity_day(cutoff: int, segments):
 	for segment_start, segment_end in segments:
 		rows = Connection.execute(
 			"""
-SELECT uuid, guild, MAX(name)
+SELECT uuid, guild, MAX(name), MIN(`timestamp`)
 FROM activity_members
 WHERE is_rollup = 0 AND `timestamp` >= %s AND `timestamp` < %s AND `timestamp` < %s
 GROUP BY uuid, guild
@@ -64,7 +67,7 @@ GROUP BY uuid, guild
 			"DELETE FROM activity_members WHERE is_rollup = 0 AND `timestamp` >= %s AND `timestamp` < %s AND `timestamp` < %s",
 			[segment_start, segment_end, cutoff],
 		))
-		rollups = [(name, guild, segment_start, uuid, 1) for uuid, guild, name in rows]
+		rollups = [(name, guild, first_timestamp, uuid, 1) for uuid, guild, name, first_timestamp in rows]
 		_append_inserts(
 			statements,
 			"activity_members",
@@ -84,7 +87,7 @@ def _rollup_player_deltas_day(cutoff: int, segments):
 	for segment_start, segment_end in segments:
 		rows = Connection.execute(
 			"""
-SELECT uuid, guild, label, SUM(delta)
+SELECT uuid, guild, label, SUM(delta), MIN(`time`)
 FROM player_delta_record
 WHERE is_rollup = 0 AND `time` >= %s AND `time` < %s AND `time` < %s
 GROUP BY uuid, guild, label
@@ -99,7 +102,7 @@ GROUP BY uuid, guild, label
 			"DELETE FROM player_delta_record WHERE is_rollup = 0 AND `time` >= %s AND `time` < %s AND `time` < %s",
 			[segment_start, segment_end, cutoff],
 		))
-		rollups = [(uuid, guild, segment_start, label, delta, 1) for uuid, guild, label, delta in rows]
+		rollups = [(uuid, guild, first_timestamp, label, delta, 1) for uuid, guild, label, delta, first_timestamp in rows]
 		_append_inserts(
 			statements,
 			"player_delta_record",
