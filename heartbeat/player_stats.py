@@ -217,12 +217,15 @@ class PlayerStatsTask(Task):
         return smoothed_graid_deltas
 
     @staticmethod
-    def append_player_global_stats_feature(feature_list, now, uuid, guild, kv_dict, old_global_stats, update_player_global_stats, deltas_player_global_stats, prefix="g"):
+    def append_player_global_stats_feature(feature_list, now, uuid, guild, kv_dict, old_global_stats, update_player_global_stats, deltas_player_global_stats, prefix="g", only_greater=False):
         old_player_global_stats = old_global_stats.get(uuid) if isinstance(old_global_stats, dict) else None
         for feat in feature_list:
             feat_name = f"{prefix}_{feat}"
             new_val = kv_dict.get(feat, 0)
-            delta_val = (new_val - old_player_global_stats[feat_name]) if old_player_global_stats and feat_name in old_player_global_stats else 0
+            old_val = old_player_global_stats.get(feat_name) if old_player_global_stats else None
+            if only_greater and (new_val is None or (old_val is not None and new_val <= old_val)):
+                continue
+            delta_val = new_val - old_val if old_val is not None else 0
             update_player_global_stats.append((uuid, feat_name, new_val))
             
             if delta_val > 0 and feat_name not in PlayerStatsTask.delta_nowr:
@@ -236,7 +239,7 @@ class PlayerStatsTask(Task):
                         deltas_player_global_stats.append((uuid, guild, now, feat_name, delta_val))
         
     @staticmethod 
-    def append_player_global_stats(stats, old_global_data, update_player_global_stats, deltas_player_global_stats):
+    def append_player_global_stats(stats, old_global_data, update_player_global_stats, deltas_player_global_stats, include_character_stats=True, only_present=False, only_greater=False):
         if not isinstance(stats, dict):
             stats = {}
         if old_global_data is None:
@@ -252,18 +255,24 @@ class PlayerStatsTask(Task):
             raids_list = {PlayerStatsTask.normalise_raid_name(k): v for k, v in raids_list.items()}
         global_data_raids_features = list(raids_list.keys()) if isinstance(raids_list, dict) else []
         global_data_pvp_features = ["kills", "deaths"]
+        if only_present:
+            global_data_features = [feature for feature in global_data_features if feature in global_data]
+            global_data_pvp_features = [feature for feature in global_data_pvp_features if feature in pvp_data]
         now = time.time()
 
         uuid = stats.get("uuid", "unknown")
         guild = (stats.get("guild") or {}).get("name")
 
         try:
-            PlayerStatsTask.append_player_global_stats_feature(global_data_features, now, uuid, guild, global_data, old_global_data, update_player_global_stats, deltas_player_global_stats)
-            PlayerStatsTask.append_player_global_stats_feature(global_data_dungeons_features, now, uuid, guild, dungeons_list, old_global_data, update_player_global_stats, deltas_player_global_stats)
-            PlayerStatsTask.append_player_global_stats_feature(global_data_raids_features, now, uuid, guild, raids_list, old_global_data, update_player_global_stats, deltas_player_global_stats)
-            PlayerStatsTask.append_player_global_stats_feature(global_data_pvp_features, now, uuid, guild, pvp_data, old_global_data, update_player_global_stats, deltas_player_global_stats)
+            PlayerStatsTask.append_player_global_stats_feature(global_data_features, now, uuid, guild, global_data, old_global_data, update_player_global_stats, deltas_player_global_stats, only_greater=only_greater)
+            PlayerStatsTask.append_player_global_stats_feature(global_data_dungeons_features, now, uuid, guild, dungeons_list, old_global_data, update_player_global_stats, deltas_player_global_stats, only_greater=only_greater)
+            PlayerStatsTask.append_player_global_stats_feature(global_data_raids_features, now, uuid, guild, raids_list, old_global_data, update_player_global_stats, deltas_player_global_stats, only_greater=only_greater)
+            PlayerStatsTask.append_player_global_stats_feature(global_data_pvp_features, now, uuid, guild, pvp_data, old_global_data, update_player_global_stats, deltas_player_global_stats, only_greater=only_greater)
         except Exception as e:
             logger.exception(e)
+
+        if not include_character_stats:
+            return
 
         # Sum character-exclusive stats to get new global stats (handle missing characters)
         characters = stats.get("characters", {}) if isinstance(stats, dict) else {}
@@ -290,6 +299,68 @@ class PlayerStatsTask(Task):
         except Exception:
             logger.exception("Error appending character-based global stats for %s", uuid)
         
+    @staticmethod
+    def append_guild_raid_stats(uuid, guild, old_guild, prev_graidcounts, global_data, inserts_graid_update, inserts_graid_deltas, only_present=False, only_greater=False):
+        graids = ((global_data.get("guildRaids", {}) or {}).get("list", {}) or {})
+        if not isinstance(graids, dict):
+            return
+
+        raid_columns = {
+            "The Canyon Colossus": "tcc",
+            "Orphion's Nexus of Light": "onol",
+            "Nest of the Grootslangs": "notg",
+            "The Nameless Anomaly": "tna",
+            "The Wartorn Palace": "twp",
+        }
+        if only_present and not any(raid_name in graids for raid_name in raid_columns):
+            return
+
+        previous = prev_graidcounts.get(uuid, {})
+        if only_present and old_guild is None:
+            old_guild = previous.get("guild")
+
+        normalised_graids = {PlayerStatsTask.normalise_raid_name(name): value for name, value in graids.items()}
+        raid_update_row = [uuid]
+        has_new_raid_data = False
+
+        for raid_name in raid_columns:
+            has_current_value = raid_name in normalised_graids
+            old_raid_count = PlayerStatsTask.null_or_value(previous.get(raid_name, 0))
+            if only_present and not has_current_value:
+                raid_update_row.append(old_raid_count)
+                continue
+
+            raid_count = PlayerStatsTask.null_or_value(normalised_graids.get(raid_name, 0))
+            if raid_name in previous:
+                if only_greater and raid_count <= old_raid_count:
+                    raid_update_row.append(old_raid_count)
+                    continue
+                if raid_count != old_raid_count:
+                    raid_delta = raid_count - old_raid_count
+                    curr_time = time.time()
+                    has_new_raid_data = True
+
+                    if raid_delta > 0:
+                        if raid_delta >= PlayerStatsTask.warsmooththresh:
+                            last_timestamp = PlayerStatsTask.get_last_graid_delta_timestamp(uuid, raid_name)
+                            smoothed_graid_deltas = PlayerStatsTask.create_smoothed_graid_deltas(uuid, guild, raid_name, raid_delta, curr_time, last_timestamp)
+                            inserts_graid_deltas.extend(smoothed_graid_deltas)
+                        else:
+                            inserts_graid_deltas.append((uuid, guild, curr_time, raid_name, raid_delta))
+                    else:
+                        logger.warning(f"graid count decreased for {uuid} {raid_name}: {old_raid_count} -> {raid_count}, updating cumu without delta")
+                    raid_update_row.append(raid_count)
+                else:
+                    raid_update_row.append(raid_count)
+            else:
+                if raid_count > 0:
+                    has_new_raid_data = True
+                raid_update_row.append(raid_count)
+
+        if has_new_raid_data or guild != old_guild:
+            raid_update_row.append(guild)
+            inserts_graid_update.append(tuple(raid_update_row))
+
     @staticmethod
     async def track_player(player, old_membership, prev_warcounts, prev_graidcounts, old_global_data, inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats) -> bool:
         uri = f"https://api.wynncraft.com/v3/player/{player}?fullResult"
@@ -444,58 +515,98 @@ class PlayerStatsTask(Task):
                 xp = cl["professions"][prof]["xpPercent"]
                 row[PlayerStatsTask.idx[prof]] += cl["professions"][prof]["level"] + (xp if xp else 0)/100
         
-        #graid track
         global_data = stats.get("globalData", {}) or {}
-        graids = (global_data.get("guildRaids", {}) or {}).get("list", {}) or {}
-        if isinstance(graids, dict):
-            graids = {PlayerStatsTask.normalise_raid_name(k): v for k, v in graids.items()}
-        
-        raid_columns = {
-            "The Canyon Colossus": "tcc",
-            "Orphion's Nexus of Light": "onol",
-            "Nest of the Grootslangs": "notg",
-            "The Nameless Anomaly": "tna",
-            "The Wartorn Palace": "twp",
-        }
-        
-        raid_update_row = [uuid]
-        has_new_raid_data = False
-        
-        for raid_name, column_name in raid_columns.items():
-            raid_count = PlayerStatsTask.null_or_value(graids.get(raid_name, 0))
-            
-            if uuid in prev_graidcounts and raid_name in prev_graidcounts[uuid]:
-                old_raid_count = PlayerStatsTask.null_or_value(prev_graidcounts[uuid][raid_name])
-                if raid_count != old_raid_count:
-                    raid_delta = raid_count - old_raid_count
-                    curr_time = time.time()
-                    has_new_raid_data = True
-
-                    if raid_delta > 0:
-                        if raid_delta >= PlayerStatsTask.warsmooththresh:
-                            last_timestamp = PlayerStatsTask.get_last_graid_delta_timestamp(uuid, raid_name)
-                            smoothed_graid_deltas = PlayerStatsTask.create_smoothed_graid_deltas(uuid, guild, raid_name, raid_delta, curr_time, last_timestamp)
-                            inserts_graid_deltas.extend(smoothed_graid_deltas)
-                        else:
-                            inserts_graid_deltas.append((uuid, guild, curr_time, raid_name, raid_delta))
-                        raid_update_row.append(raid_count)
-                    else:
-                        logger.warning(f"graid count decreased for {uuid} {raid_name}: {old_raid_count} -> {raid_count}, updating cumu without delta")
-                        raid_update_row.append(raid_count)
-                else:
-                    raid_update_row.append(raid_count)
-            else:
-                if raid_count > 0:
-                    has_new_raid_data = True
-                raid_update_row.append(raid_count)
-        
-        if has_new_raid_data or guild != old_guild:
-            raid_update_row.append(guild)
-            inserts_graid_update.append(tuple(raid_update_row))
+        PlayerStatsTask.append_guild_raid_stats(
+            uuid,
+            guild,
+            old_guild,
+            prev_graidcounts,
+            global_data,
+            inserts_graid_update,
+            inserts_graid_deltas,
+        )
         
         inserts.append(row)
         uuid_name.append((uuid, player))
         return True
+
+    @staticmethod
+    async def track_guild_roster(roster_members):
+        members_by_uuid = {}
+        for guild, guild_rank, member_name, member_data in roster_members:
+            if not isinstance(member_data, dict):
+                continue
+            uuid = member_data.get("uuid")
+            username = member_data.get("legacyName") or member_name
+            if not uuid or not username:
+                continue
+            members_by_uuid[uuid] = (guild, guild_rank, username, member_data)
+
+        if not members_by_uuid:
+            return 0
+
+        _, old_membership, _, prev_graidcounts, old_global_data = await PlayerStatsTask.get_stats_track_references(
+            needs_player_list=False,
+            force_player_list=list(members_by_uuid),
+        )
+        inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats = PlayerStatsTask.get_empty_stats_track_buffers()
+
+        for uuid, (guild, guild_rank, username, member_data) in members_by_uuid.items():
+            global_data = member_data.get("globalData")
+            if not isinstance(global_data, dict):
+                global_data = {}
+
+            stats = {
+                "uuid": uuid,
+                "username": username,
+                "guild": {"name": guild, "rank": guild_rank},
+                "globalData": global_data,
+            }
+            PlayerStatsTask.append_player_global_stats(
+                stats,
+                old_global_data,
+                update_player_global_stats,
+                deltas_player_global_stats,
+                include_character_stats=False,
+                only_present=True,
+                only_greater=True,
+            )
+
+            old_guild, old_rank = old_membership.get(uuid, [None, None])
+            previous_guild = prev_graidcounts.get(uuid, {}).get("guild")
+            if old_guild is None:
+                old_guild = previous_guild
+            if old_guild != guild:
+                inserts_guild_log.append(
+                    f"('{uuid}', '{PlayerStatsTask.sql_escape(old_guild)}', '{PlayerStatsTask.sql_escape(old_rank)}', '{PlayerStatsTask.sql_escape(guild)}', {int(time.time())})"
+                )
+
+            PlayerStatsTask.append_guild_raid_stats(
+                uuid,
+                guild,
+                old_guild,
+                prev_graidcounts,
+                global_data,
+                inserts_graid_update,
+                inserts_graid_deltas,
+                only_present=True,
+                only_greater=True,
+            )
+            uuid_name.append((uuid, username))
+
+        PlayerStatsTask.write_results_to_db(
+            inserts_war_update,
+            inserts_war_deltas,
+            inserts_graid_update,
+            inserts_graid_deltas,
+            inserts_guild_log,
+            inserts,
+            uuid_name,
+            update_player_global_stats,
+            deltas_player_global_stats,
+        )
+        return len(members_by_uuid)
+
     @staticmethod
     async def get_stats_track_references(needs_player_list=True, force_player_list=[]):
         if needs_player_list:
@@ -544,8 +655,8 @@ class PlayerStatsTask(Task):
         res = Connection.execute(f"SELECT uuid, time, tcc, onol, notg, tna, twp, guild FROM cumu_graids WHERE uuid IN {existing_uuids_clause}",
                                 prep_values=existing_player_uuids)
         prev_graidcounts = {}
-        for uuid, _, tcc, onol, notg, tna, twp, _ in res:
-            prev_graidcounts[uuid] = {"The Canyon Colossus": tcc, "Orphion's Nexus of Light": onol, "Nest of the Grootslangs": notg, "The Nameless Anomaly": tna, "The Wartorn Palace": twp}
+        for uuid, _, tcc, onol, notg, tna, twp, guild in res:
+            prev_graidcounts[uuid] = {"The Canyon Colossus": tcc, "Orphion's Nexus of Light": onol, "Nest of the Grootslangs": notg, "The Nameless Anomaly": tna, "The Wartorn Palace": twp, "guild": guild}
         
         res = Connection.execute(f"SELECT uuid, label, value FROM player_global_stats WHERE uuid IN {existing_uuids_clause}",
                                 prep_values=existing_player_uuids)
