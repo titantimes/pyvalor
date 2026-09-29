@@ -54,6 +54,7 @@ class GXPTrackerTask(Task):
                 start = time.time()
                 end = start
                 guildRosterSnapshots = []
+                guildRosterGuilds = set()
 
                 guildRows = Connection.execute("SELECT guild FROM guild_tracking_schedule ORDER BY tier DESC, dailyGraids DESC;")
                 guildList = [g[0] for g in guildRows] if guildRows else []
@@ -74,7 +75,12 @@ class GXPTrackerTask(Task):
 
                     guildUrl = f"https://api.wynncraft.com/v3/guild/{guild}"
                     guildData = await Async.get(guildUrl)
-                    if guildData is None or "members" not in guildData or "level" not in guildData:
+                    if (
+                        not isinstance(guildData, dict)
+                        or not isinstance(guildData.get("members"), dict)
+                        or not isinstance(guildData.get("members", {}).get("total"), int)
+                        or "level" not in guildData
+                    ):
                         continue
                     guildLastPolledAt[guild] = start
 
@@ -90,6 +96,7 @@ class GXPTrackerTask(Task):
                     countRaidThreshold = 1 / 1.15 * guReqToNextXp / 1000 / 4
 
                     members = []
+                    guildRosterSnapshotsForGuild = []
                     insertGxpDeltas = []
                     updateGxpValues = []
                     insertRaidDeltas = []
@@ -109,7 +116,7 @@ class GXPTrackerTask(Task):
                                 }
                             else:
                                 rosterGlobalData = {}
-                            guildRosterSnapshots.append((guild, rank, memberName, {
+                            guildRosterSnapshotsForGuild.append((guild, rank, memberName, {
                                 "uuid": memberFields.get("uuid"),
                                 "legacyName": memberFields.get("legacyName"),
                                 "globalData": rosterGlobalData,
@@ -118,6 +125,17 @@ class GXPTrackerTask(Task):
                             updateGxpValues.append((memberFields["uuid"], memberFields["contributed"]))
                             if gxpDelta > 0:
                                 insertGxpDeltas.append((memberFields["uuid"], gxpDelta))
+
+                    if len(guildRosterSnapshotsForGuild) == guildData["members"]["total"]:
+                        guildRosterGuilds.add(guild)
+                    else:
+                        logger.warning(
+                            "GXP TRACKER: incomplete member roster for %s (%s/%s); skipping membership reconciliation",
+                            guild,
+                            len(guildRosterSnapshotsForGuild),
+                            guildData["members"]["total"],
+                        )
+                    guildRosterSnapshots.extend(guildRosterSnapshotsForGuild)
 
                     for memberUuid, gxpDelta in insertGxpDeltas:
                         if guildLevel >= 95 and gxpDelta >= countRaidThreshold and countRaidThreshold > 0:
@@ -187,7 +205,7 @@ class GXPTrackerTask(Task):
                     end = time.time()
                     await asyncio.sleep(0.3)
 
-                updatedRosterMembers = await PlayerStatsTask.track_guild_roster(guildRosterSnapshots)
+                updatedRosterMembers = await PlayerStatsTask.track_guild_roster(guildRosterSnapshots, guildRosterGuilds)
                 if updatedRosterMembers:
                     logger.info(f"GUILD ROSTER PLAYER STATS: processed {updatedRosterMembers} member snapshots")
 
