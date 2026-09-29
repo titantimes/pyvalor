@@ -193,7 +193,7 @@ class GXPTrackerTask(Task):
                                     )
 
                     if insertGxpDeltas:
-                        query = "INSERT INTO player_delta_record VALUES " + \
+                        query = "INSERT INTO player_delta_record (uuid, guild, time, label, delta) VALUES " + \
                             ",".join(f"('{uuid}', '{guild}', {start}, 'gu_gxp', {gxpDelta})" for uuid, gxpDelta in insertGxpDeltas)
                         Connection.execute(query)
 
