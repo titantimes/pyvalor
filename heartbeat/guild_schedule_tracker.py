@@ -29,11 +29,11 @@ class GuildScheduleTrackerTask(Task):
 
     @staticmethod
     def getTierFromWars(dailyWars):
-        if dailyWars >= 400:
+        if dailyWars >= 300:
             return 3
-        elif dailyWars >= 200:
+        elif dailyWars >= 150:
             return 2
-        elif dailyWars >= 100:
+        elif dailyWars >= 75:
             return 1
         return 0
 
