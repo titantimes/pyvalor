@@ -83,7 +83,7 @@ class PlayerActivityTask(Task):
             end = time.time()
             logger.info("PLAYER ACTIVITY TASK"+f" {end-start}s")
 
-            rolled = rollup_one_eligible_day(end)
+            rolled = rolloned(end)
             if rolled:
                 logger.info(f"HISTORY ROLLUP: processed {rolled}")
             
