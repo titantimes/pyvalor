@@ -264,7 +264,7 @@ class PlayerStatsTask(Task):
         now = time.time()
 
         uuid = stats.get("uuid", "unknown")
-        guild = (stats.get("guild") or {}).get("name")
+        guild = (stats.get("guild") or {}).get("name") or "None"
 
         try:
             PlayerStatsTask.append_player_global_stats_feature(global_data_features, now, uuid, guild, global_data, old_global_data, update_player_global_stats, deltas_player_global_stats, only_greater=only_greater)
