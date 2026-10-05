@@ -171,7 +171,6 @@ class ReclaimTrackerTask(Task):
             reclaimstarted = False
 
             while not self.finished:
-                logger.info("RECLAIM TRACK START")
                 loopstart = time.time()
 
                 wasinseason = self.season_active
@@ -371,7 +370,6 @@ class ReclaimTrackerTask(Task):
                 prevowners = dict(currentowners)
 
                 loopend = time.time()
-                logger.info("RECLAIM TRACK" + f" {loopend-loopstart}s")
                 await asyncio.sleep(self.sleep)
                 #dont add a finish given this runs like all the time
         self.continuous_task = asyncio.get_event_loop().create_task(self.continuously(reclaimtrackertask))
