@@ -29,11 +29,11 @@ class GuildScheduleTrackerTask(Task):
 
     @staticmethod
     def getTierFromWars(dailyWars):
-        if dailyWars >= 300:
+        if dailyWars >= 400:
             return 3
-        elif dailyWars >= 150:
+        elif dailyWars >= 200:
             return 2
-        elif dailyWars >= 75:
+        elif dailyWars >= 100:
             return 1
         return 0
 
@@ -83,6 +83,22 @@ GROUP BY guild
 
                     existingRows = Connection.execute("SELECT guild FROM guild_tracking_schedule")
                     existingGuilds = [g[0] for g in existingRows] if existingRows else []
+                    weeklyActiveGuilds = set()
+                    if existingGuilds:
+                        placeholders = ",".join(["%s"] * len(existingGuilds))
+                        weeklyActivityQuery = f"""
+SELECT guild
+FROM guild_member_count
+WHERE time >= %s AND time <= %s
+    AND guild IN ({placeholders})
+GROUP BY guild
+HAVING AVG(count) >= 3.0
+"""
+                        weeklyActivityRows = Connection.execute(
+                            weeklyActivityQuery,
+                            prep_values=[start - 86400 * 7, start, *existingGuilds],
+                        )
+                        weeklyActiveGuilds = {row[0] for row in weeklyActivityRows}
                     
                     guildTierMap = {}
                     for guild, dailyGraids in graidResults:
@@ -111,6 +127,8 @@ GROUP BY guild
 
                         forcedTier = 3 if guild in gxpLevelExceptions else graidExceptions.get(guild, 0)
                         tier = max(graidTier, warTierMap.get(guild, 0), forcedTier)
+                        if guild in weeklyActiveGuilds:
+                            tier = max(tier, 1)
 
                         if tier > 0:
                             interval = tierIntervals.get(tier, 1800)
