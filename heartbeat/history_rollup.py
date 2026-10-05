@@ -7,8 +7,8 @@ from db import Connection
 SECONDS_PER_DAY = 86400
 SECONDS_PER_WEEK = 7 * SECONDS_PER_DAY
 
-
-def _three_month_cutoff(now: float) -> int:
+#arbitrary 1 day aggr start
+def threemonf(now: float) -> int:
 	current = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
 	month_index = current.year * 12 + current.month - 1 - 3
 	year, month_zero_based = divmod(month_index, 12)
@@ -16,8 +16,8 @@ def _three_month_cutoff(now: float) -> int:
 	day = min(current.day, calendar.monthrange(year, month)[1])
 	return int(current.replace(year=year, month=month, day=day).timestamp())
 
-
-def _one_year_cutoff(now: float) -> int:
+#arbitrary week start
+def oneyear(now: float) -> int:
 	current = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
 	try:
 		previous_year = current.replace(year=current.year - 1)
@@ -26,7 +26,7 @@ def _one_year_cutoff(now: float) -> int:
 	return int(previous_year.timestamp())
 
 
-def _oldest_complete_day(table: str, time_column: str, cutoff: int):
+def lastday(table: str, time_column: str, cutoff: int):
 	result = Connection.execute(
 		f"SELECT MIN(`{time_column}`) FROM `{table}` "
 		f"WHERE is_rollup = 0 AND `{time_column}` < %s",
@@ -40,14 +40,14 @@ def _oldest_complete_day(table: str, time_column: str, cutoff: int):
 	return day_start
 
 
-def _week_start(timestamp: int) -> int:
+def startweek(timestamp: int) -> int:
 	value = datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc)
 	monday = value - datetime.timedelta(days=value.weekday())
 	monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
 	return int(monday.timestamp())
 
 
-def _oldest_complete_week(table: str, time_column: str, cutoff: int):
+def lastweek(table: str, time_column: str, cutoff: int):
 	result = Connection.execute(
 		f"SELECT MIN(`{time_column}`) FROM `{table}` "
 		f"WHERE is_week_rollup = 0 AND `{time_column}` < %s",
@@ -55,13 +55,13 @@ def _oldest_complete_week(table: str, time_column: str, cutoff: int):
 	)
 	if not result or result[0][0] is None:
 		return None
-	week_start = _week_start(int(result[0][0]))
+	week_start = startweek(int(result[0][0]))
 	if week_start + SECONDS_PER_WEEK > cutoff:
 		return None
 	return week_start
 
 
-def _day_segments(day_start: int, season_boundaries: set[int]):
+def daysplit(day_start: int, season_boundaries: set[int]):
 	day_end = day_start + SECONDS_PER_DAY
 	cuts = [day_start]
 	cuts.extend(sorted(boundary for boundary in season_boundaries if day_start < boundary < day_end))
@@ -69,7 +69,7 @@ def _day_segments(day_start: int, season_boundaries: set[int]):
 	return list(zip(cuts, cuts[1:]))
 
 
-def _week_segments(week_start: int, season_boundaries: set[int]):
+def weeksplit(week_start: int, season_boundaries: set[int]):
 	week_end = week_start + SECONDS_PER_WEEK
 	cuts = [week_start]
 	cuts.extend(sorted(boundary for boundary in season_boundaries if week_start < boundary < week_end))
@@ -77,7 +77,7 @@ def _week_segments(week_start: int, season_boundaries: set[int]):
 	return list(zip(cuts, cuts[1:]))
 
 
-def _append_inserts(statements, table: str, columns: str, row_width: int, rows):
+def appendi(statements, table: str, columns: str, row_width: int, rows):
 	for offset in range(0, len(rows), 500):
 		batch = rows[offset:offset + 500]
 		values_clause = ",".join(["(" + ",".join(["%s"] * row_width) + ")"] * len(batch))
@@ -85,7 +85,7 @@ def _append_inserts(statements, table: str, columns: str, row_width: int, rows):
 		statements.append((f"INSERT INTO `{table}` ({columns}) VALUES {values_clause}", values))
 
 
-def _rollup_activity_day(cutoff: int, segments):
+def dayroll(cutoff: int, segments):
 	statements = []
 	group_count = 0
 	for segment_start, segment_end in segments:
@@ -107,7 +107,7 @@ GROUP BY uuid, guild
 			[segment_start, segment_end, cutoff],
 		))
 		rollups = [(name, guild, first_timestamp, uuid, 1) for uuid, guild, name, first_timestamp in rows]
-		_append_inserts(
+		appendi(
 			statements,
 			"activity_members",
 			"name, guild, `timestamp`, uuid, is_rollup, is_week_rollup",
@@ -120,7 +120,7 @@ GROUP BY uuid, guild
 	return group_count
 
 
-def _rollup_player_deltas_day(cutoff: int, segments):
+def deltadayRoll(cutoff: int, segments):
 	statements = []
 	group_count = 0
 	for segment_start, segment_end in segments:
@@ -142,7 +142,7 @@ GROUP BY uuid, guild, label
 			[segment_start, segment_end, cutoff],
 		))
 		rollups = [(uuid, guild, first_timestamp, label, delta, 1) for uuid, guild, label, delta, first_timestamp in rows]
-		_append_inserts(
+		appendi(
 			statements,
 			"player_delta_record",
 			"uuid, guild, `time`, label, delta, is_rollup, is_week_rollup",
@@ -155,7 +155,7 @@ GROUP BY uuid, guild, label
 	return group_count
 
 
-def _rollup_activity_week(cutoff: int, segments):
+def weekroll(cutoff: int, segments):
 	statements = []
 	group_count = 0
 	for segment_start, segment_end in segments:
@@ -177,7 +177,7 @@ GROUP BY uuid, guild
 			[segment_start, segment_end, cutoff],
 		))
 		rollups = [(name, guild, first_timestamp, uuid, 1, 1) for uuid, guild, name, first_timestamp in rows]
-		_append_inserts(
+		appendi(
 			statements,
 			"activity_members",
 			"name, guild, `timestamp`, uuid, is_rollup, is_week_rollup",
@@ -190,7 +190,7 @@ GROUP BY uuid, guild
 	return group_count
 
 
-def _rollup_player_deltas_week(cutoff: int, segments):
+def deltaweekRoll(cutoff: int, segments):
 	statements = []
 	group_count = 0
 	for segment_start, segment_end in segments:
@@ -212,7 +212,7 @@ GROUP BY uuid, guild, label
 			[segment_start, segment_end, cutoff],
 		))
 		rollups = [(uuid, guild, first_timestamp, label, delta, 1, 1) for uuid, guild, label, delta, first_timestamp in rows]
-		_append_inserts(
+		appendi(
 			statements,
 			"player_delta_record",
 			"uuid, guild, `time`, label, delta, is_rollup, is_week_rollup",
@@ -225,42 +225,42 @@ GROUP BY uuid, guild, label
 	return group_count
 
 
-def rollup_one_eligible_day(now: float):
-	day_cutoff = _three_month_cutoff(now)
-	week_cutoff = _one_year_cutoff(now)
-	season_rows = Connection.execute(
+def rolloned(now: float):
+	dcut = threemonf(now)
+	wcut = oneyear(now)
+	seasonal = Connection.execute(
 		"SELECT start_time, end_time FROM season_list WHERE LOWER(season_name) <> 'all'"
 	)
 	season_boundaries = {
 		int(boundary)
-		for row in (season_rows or [])
+		for row in (seasonal or [])
 		for boundary in row
 		if boundary is not None
 	}
 
 	rolled = {}
-	activity_day = _oldest_complete_day("activity_members", "timestamp", day_cutoff)
-	if activity_day is not None:
-		rolled["activity_groups"] = _rollup_activity_day(
-			day_cutoff, _day_segments(activity_day, season_boundaries)
+	adayd = lastday("activity_members", "timestamp", dcut)
+	if adayd is not None:
+		rolled["activity_groups"] = dayroll(
+			dcut, daysplit(adayd, season_boundaries)
 		)
 
-	delta_day = _oldest_complete_day("player_delta_record", "time", day_cutoff)
-	if delta_day is not None:
-		rolled["delta_groups"] = _rollup_player_deltas_day(
-			day_cutoff, _day_segments(delta_day, season_boundaries)
+	dday = lastday("player_delta_record", "time", dcut)
+	if dday is not None:
+		rolled["delta_groups"] = deltadayRoll(
+			dcut, daysplit(dday, season_boundaries)
 		)
 
-	activity_week = _oldest_complete_week("activity_members", "timestamp", week_cutoff)
-	if activity_week is not None:
-		rolled["activity_week_groups"] = _rollup_activity_week(
-			week_cutoff, _week_segments(activity_week, season_boundaries)
+	aweek = lastweek("activity_members", "timestamp", wcut)
+	if aweek is not None:
+		rolled["activity_week_groups"] = weekroll(
+			wcut, weeksplit(aweek, season_boundaries)
 		)
 
-	delta_week = _oldest_complete_week("player_delta_record", "time", week_cutoff)
-	if delta_week is not None:
-		rolled["delta_week_groups"] = _rollup_player_deltas_week(
-			week_cutoff, _week_segments(delta_week, season_boundaries)
+	aweek = lastweek("player_delta_record", "time", wcut)
+	if aweek is not None:
+		rolled["delta_week_groups"] = deltaweekRoll(
+			wcut, weeksplit(aweek, season_boundaries)
 		)
 
 	return rolled
