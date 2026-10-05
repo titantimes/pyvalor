@@ -221,6 +221,9 @@ class PlayerStatsTask(Task):
         old_player_global_stats = old_global_stats.get(uuid) if isinstance(old_global_stats, dict) else None
         for feat in feature_list:
             feat_name = f"{prefix}_{feat}"
+            if feat_name in PlayerStatsTask.delta_nowr:
+                continue
+
             new_val = kv_dict.get(feat, 0)
             old_val = old_player_global_stats.get(feat_name) if old_player_global_stats else None
             if only_greater and (new_val is None or (old_val is not None and new_val <= old_val)):
