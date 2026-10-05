@@ -3,7 +3,7 @@ import aiohttp
 from db import Connection
 from network import Async
 from .task import Task
-from .history_rollup import rollup_one_eligible_day
+from .history_rollup import rolloned
 from collections import defaultdict
 import time
 import datetime
