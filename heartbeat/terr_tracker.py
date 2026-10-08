@@ -35,6 +35,14 @@ class TerritoryTrackTask(Task):
 
                 URL = "https://api.wynncraft.com/v3/guild/list/territory"
                 terrs = await Async.get(URL)
+                if not isinstance(terrs, dict) or not terrs:
+                    logger.warning(
+                        "Territory fetch returned no usable snapshot (type=%s); retrying in %ss",
+                        type(terrs).__name__, self.sleep
+                    )
+                    await asyncio.sleep(self.sleep)
+                    continue
+
                 old_terrs = {x[0]: x[1] for x in Connection.execute("SELECT * FROM territories")}
 
                 # guild_terr_cnt = {terrs[terr]["guild"]["name"]: 0 for terr in terrs}
