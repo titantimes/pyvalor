@@ -430,7 +430,7 @@ class PlayerStatsTask(Task):
         if old_guild == "None":
             old_guild = None
 
-        if guild != old_guild:
+        if str(guild or "None").casefold() != str(old_guild or "None").casefold():
             inserts_guild_log.append(f"('{uuid}', '{old_guild}', '{old_rank}', '{guild}', {int(time.time())})")
 
         row[PlayerStatsTask.idx["guild"]] = f'"{guild}"'
@@ -596,7 +596,7 @@ class PlayerStatsTask(Task):
             previous_guild = prev_graidcounts.get(uuid, {}).get("guild")
             if old_guild is None:
                 old_guild = previous_guild
-            if old_guild != guild:
+            if str(old_guild or "None").casefold() != str(guild or "None").casefold():
                 inserts_guild_log.append(
                     f"('{uuid}', '{PlayerStatsTask.sql_escape(old_guild)}', '{PlayerStatsTask.sql_escape(old_rank)}', '{PlayerStatsTask.sql_escape(guild)}', {int(time.time())})"
                 )
