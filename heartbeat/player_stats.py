@@ -811,6 +811,7 @@ class PlayerStatsTask(Task):
             uuid_name,
             update_player_global_stats,
             deltas_player_global_stats,
+            seed_names_only=True,
         )
         return len(members_by_uuid) + len(departed_members)
 
@@ -891,7 +892,7 @@ class PlayerStatsTask(Task):
         return inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats
 
     @staticmethod
-    def write_results_to_db(inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats):
+    def write_results_to_db(inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats, seed_names_only=False):
         if not (inserts_war_update or inserts_war_deltas or inserts_graid_update or inserts_graid_deltas or inserts_guild_log or inserts or uuid_name or update_player_global_stats or deltas_player_global_stats):
             return
 
@@ -946,21 +947,33 @@ class PlayerStatsTask(Task):
                 logger.error(f"write_results_to_db: global delta failed: {e}")
 
         if uuid_name:
-            name_paren = ['\''+uuid+'\'' for uuid, _ in uuid_name]
+            uuid_name = list(dict(uuid_name).items())
+            placeholders = ",".join(["%s"] * len(uuid_name))
             old_names = Connection.execute(
-                f"SELECT uuid, name FROM uuid_name WHERE uuid IN ({','.join(name_paren)})")
+                f"SELECT uuid, name FROM uuid_name WHERE uuid IN ({placeholders})",
+                prep_values=[uuid for uuid, _ in uuid_name],
+            )
             old_names_dict = {uuid: old for uuid, old in old_names} # believe me, this way is still faster than tmp table join
+            if seed_names_only:
+                uuid_name = [(uuid, name) for uuid, name in uuid_name if uuid not in old_names_dict]
             uuid_name_history_update = []
             for uuid, name in uuid_name:
-                if uuid in old_names_dict and old_names_dict[uuid] != name:
+                if uuid in old_names_dict and old_names_dict[uuid].casefold() != name.casefold():
                     uuid_name_history_update.append((uuid, old_names_dict[uuid], name, curr_time))
+            name_statements = []
             if uuid_name_history_update:
-                query_uuid_name_history = "INSERT INTO uuid_name_history VALUES " + \
-                    ','.join(f"('{uuid}','{old}','{new}',{curr_time})" for uuid, old, new, curr_time in uuid_name_history_update)
-                Connection.execute(query_uuid_name_history)
-
-            query_uuid = "REPLACE INTO uuid_name VALUES " + ','.join(f"(\'{uuid}\',\'{name}\')" for uuid, name in uuid_name)
-            Connection.execute(query_uuid)
+                name_statements.append((
+                    "INSERT INTO uuid_name_history VALUES " + ",".join(["(%s, %s, %s, %s)"] * len(uuid_name_history_update)),
+                    [value for history_row in uuid_name_history_update for value in history_row],
+                ))
+            if uuid_name:
+                name_command = "INSERT IGNORE" if seed_names_only else "REPLACE"
+                name_statements.append((
+                    name_command + " INTO uuid_name VALUES " + ",".join(["(%s, %s)"] * len(uuid_name)),
+                    [value for name_row in uuid_name for value in name_row],
+                ))
+            if name_statements:
+                Connection.execute_transaction(name_statements)
 
         if inserts:
             query_stats = "REPLACE INTO player_stats VALUES " + ','.join(f"('{x[0]}', {str(x[1])}, {','.join(map(str, x[2:]))})" for x in inserts)
