@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import json
 import math
 import os
+from urllib.parse import quote
 from log import logger
 
 load_dotenv()
@@ -74,6 +75,58 @@ class PlayerStatsTask(Task):
         if value is None:
             return "None"
         return str(value).replace("'", "''")
+
+    @staticmethod
+    def guild_key(value):
+        value = str(value or "").strip().casefold()
+        return None if value in {"", "none", "null"} else value
+
+    @staticmethod
+    async def playerinG(guild, uuid):
+        response = await Async.get(f"https://api.wynncraft.com/v3/guild/{quote(guild, safe='')}")
+        if not isinstance(response, dict) or PlayerStatsTask.guild_key(response.get("name")) != PlayerStatsTask.guild_key(guild):
+            return None
+        members = response.get("members")
+        if not isinstance(members, dict) or type(members.get("total")) is not int:
+            return None
+        member_uuids = []
+        for rank_members in members.values():
+            if not isinstance(rank_members, dict):
+                continue
+            for member in rank_members.values():
+                if not isinstance(member, dict) or not isinstance(member.get("uuid"), str) or not member["uuid"]:
+                    return None
+                member_uuids.append(member["uuid"].replace("-", "").casefold())
+        if len(member_uuids) != members["total"] or len(set(member_uuids)) != len(member_uuids):
+            return None
+        return uuid.replace("-", "").casefold() in member_uuids
+
+    @staticmethod
+    async def memchangeyn(uuid, old_guild, guild, source):
+        try:
+            if source == "player":
+                if PlayerStatsTask.guild_key(old_guild):
+                    if await PlayerStatsTask.playerinG(old_guild, uuid) is not False:
+                        raise ValueError("previous guild roster does not confirm departure")
+                if PlayerStatsTask.guild_key(guild):
+                    if await PlayerStatsTask.playerinG(guild, uuid) is not True:
+                        raise ValueError("new guild roster does not confirm membership")
+            else:
+                response = await Async.get(f"https://api.wynncraft.com/v3/player/{uuid}?fullResult")
+                if not isinstance(response, dict) or response.get("uuid", "").replace("-", "").casefold() != uuid.replace("-", "").casefold():
+                    raise ValueError("player response does not match UUID")
+                if "guild" not in response:
+                    raise ValueError("player response has no membership field")
+                membership = response["guild"]
+                if membership is not None and (not isinstance(membership, dict) or not PlayerStatsTask.guild_key(membership.get("name"))):
+                    raise ValueError("player response has invalid membership")
+                observed_guild = membership["name"] if membership else None
+                if PlayerStatsTask.guild_key(observed_guild) != PlayerStatsTask.guild_key(guild):
+                    raise ValueError("player response disagrees with guild roster")
+        except Exception as error:
+            logger.warning("GUILD MEMBERSHIP deferred %s -> %s for %s (%s): %s", old_guild, guild, uuid, source, error)
+            return False
+        return True
 
     @staticmethod
     def normalise_raid_name(raid_name: str) -> str:
@@ -415,8 +468,9 @@ class PlayerStatsTask(Task):
         row[PlayerStatsTask.idx["uuid"]] = uuid
         player = stats["username"] # make sure player becomes username
 
-        guild = stats.get("guild", {}).get("name") if stats.get("guild") else None
-        guild_rank = stats.get("guild", {}).get("rank") if stats.get("guild") else None
+        guild_data = stats.get("guild")
+        guild = guild_data.get("name") if isinstance(guild_data, dict) else None
+        guild_rank = guild_data.get("rank") if isinstance(guild_data, dict) else None
         current_membership = Connection.execute(
             "SELECT guild, guild_rank FROM player_stats WHERE uuid = %s",
             prep_values=[uuid],
@@ -434,14 +488,29 @@ class PlayerStatsTask(Task):
         if old_guild == "None":
             old_guild = None
 
-        if "guild" not in stats:
+        if "guild" not in stats or (guild_data is not None and (not isinstance(guild_data, dict) or not PlayerStatsTask.guild_key(guild))):
             guild, guild_rank = old_guild, old_rank
 
-        if str(guild or "None").casefold() != str(old_guild or "None").casefold():
-            inserts_guild_log.append(f"('{uuid}', '{PlayerStatsTask.sql_escape(old_guild)}', '{PlayerStatsTask.sql_escape(old_rank)}', '{PlayerStatsTask.sql_escape(guild)}', {int(time.time())})")
+        if PlayerStatsTask.guild_key(guild) != PlayerStatsTask.guild_key(old_guild):
+            if not await PlayerStatsTask.memchangeyn(uuid, old_guild, guild, "player"):
+                guild, guild_rank = old_guild, old_rank
+            latest_membership = Connection.execute(
+                "SELECT guild, guild_rank FROM player_stats WHERE uuid = %s",
+                prep_values=[uuid],
+            )
+            if latest_membership:
+                latest_guild, latest_rank = latest_membership[0]
+                if PlayerStatsTask.guild_key(latest_guild) != PlayerStatsTask.guild_key(old_guild):
+                    guild, guild_rank = latest_guild, latest_rank
+                old_guild, old_rank = latest_guild, latest_rank
 
-        row[PlayerStatsTask.idx["guild"]] = f'"{guild}"'
-        row[PlayerStatsTask.idx["guild_rank"]] = f'"{guild_rank}"'
+        guild_log_row = None
+        if PlayerStatsTask.guild_key(guild) != PlayerStatsTask.guild_key(old_guild):
+            guild_log_row = (uuid, str(old_guild), str(old_rank), str(guild), int(time.time()))
+
+        stats = {**stats, "guild": {"name": guild, "rank": guild_rank} if PlayerStatsTask.guild_key(guild) else None}
+        row[PlayerStatsTask.idx["guild"]] = str(guild)
+        row[PlayerStatsTask.idx["guild_rank"]] = str(guild_rank)
 
         if "lastJoin" in stats:
             try:
@@ -536,7 +605,10 @@ class PlayerStatsTask(Task):
             inserts_graid_deltas,
         )
         
-        inserts.append(row)
+        statements = [("REPLACE INTO player_stats VALUES (" + ",".join(["%s"] * len(row)) + ")", row)]
+        if guild_log_row is not None:
+            statements.append(("INSERT INTO guild_join_log VALUES (%s, %s, %s, %s, %s)", guild_log_row))
+        Connection.execute_transaction(statements)
         uuid_name.append((uuid, player))
         return True
 
@@ -585,10 +657,52 @@ class PlayerStatsTask(Task):
             )
         else:
             old_membership, prev_graidcounts, old_global_data = {}, {}, {}
+
+        proposed_changes = {}
+        for uuid, (guild, _, _, _) in members_by_uuid.items():
+            old_guild = old_membership.get(uuid, [prev_graidcounts.get(uuid, {}).get("guild"), None])[0]
+            if PlayerStatsTask.guild_key(old_guild) != PlayerStatsTask.guild_key(guild):
+                if uuid in old_membership or PlayerStatsTask.guild_key(old_guild):
+                    key = (uuid, PlayerStatsTask.guild_key(old_guild), PlayerStatsTask.guild_key(guild))
+                    proposed_changes[key] = (old_guild, guild)
+        for uuid, (guild, _) in prior_memberships_by_uuid.items():
+            if uuid not in members_by_uuid and uuid not in conflicting_uuids:
+                proposed_changes[(uuid, PlayerStatsTask.guild_key(guild), None)] = (guild, None)
+
+        confirmed_changes = {}
+        for key, (old_guild, guild) in proposed_changes.items():
+            confirmed_changes[key] = await PlayerStatsTask.memchangeyn(key[0], old_guild, guild, "roster")
+
+        if proposed_changes:
+            refreshed_memberships = {}
+            membership_uuids = list(set(members_by_uuid) | set(prior_memberships_by_uuid))
+            for offset in range(0, len(membership_uuids), 500):
+                uuid_batch = membership_uuids[offset:offset + 500]
+                placeholders = ",".join(["%s"] * len(uuid_batch))
+                rows = Connection.execute(
+                    f"SELECT uuid, guild, guild_rank FROM player_stats WHERE uuid IN ({placeholders})",
+                    prep_values=uuid_batch,
+                )
+                refreshed_memberships.update({uuid: (guild, rank) for uuid, guild, rank in rows})
+            old_membership = refreshed_memberships
+            guild_keys = {PlayerStatsTask.guild_key(guild) for guild in fetched_guilds}
+            prior_memberships_by_uuid = {
+                uuid: membership for uuid, membership in refreshed_memberships.items()
+                if PlayerStatsTask.guild_key(membership[0]) in guild_keys
+            }
+
         inserts_war_update, inserts_war_deltas, inserts_graid_update, inserts_graid_deltas, inserts_guild_log, inserts, uuid_name, update_player_global_stats, deltas_player_global_stats = PlayerStatsTask.get_empty_stats_track_buffers()
 
         membership_updates = {}
         for uuid, (guild, guild_rank, username, member_data) in members_by_uuid.items():
+            old_guild, old_rank = old_membership.get(uuid, [None, None])
+            if uuid not in old_membership:
+                old_guild = prev_graidcounts.get(uuid, {}).get("guild")
+            if PlayerStatsTask.guild_key(old_guild) != PlayerStatsTask.guild_key(guild):
+                if uuid in old_membership or PlayerStatsTask.guild_key(old_guild):
+                    key = (uuid, PlayerStatsTask.guild_key(old_guild), PlayerStatsTask.guild_key(guild))
+                    if not confirmed_changes.get(key):
+                        continue
             membership_updates.setdefault((guild, guild_rank), []).append(uuid)
             global_data = member_data.get("globalData")
             if not isinstance(global_data, dict):
@@ -610,11 +724,7 @@ class PlayerStatsTask(Task):
                 only_greater=True,
             )
 
-            old_guild, old_rank = old_membership.get(uuid, [None, None])
-            previous_guild = prev_graidcounts.get(uuid, {}).get("guild")
-            if uuid not in old_membership:
-                old_guild = previous_guild
-            if str(old_guild or "None").casefold() != str(guild or "None").casefold():
+            if PlayerStatsTask.guild_key(old_guild) != PlayerStatsTask.guild_key(guild):
                 inserts_guild_log.append(
                     f"('{uuid}', '{PlayerStatsTask.sql_escape(old_guild)}', '{PlayerStatsTask.sql_escape(old_rank)}', '{PlayerStatsTask.sql_escape(guild)}', {int(time.time())})"
                 )
@@ -632,11 +742,15 @@ class PlayerStatsTask(Task):
             )
             uuid_name.append((uuid, username))
 
-        departed_members = [
+        possible_departures = [
             (uuid, guild, guild_rank)
             for uuid, (guild, guild_rank) in prior_memberships_by_uuid.items()
             if uuid not in members_by_uuid and uuid not in conflicting_uuids
         ]
+        departed_members = []
+        for uuid, old_guild, old_rank in possible_departures:
+            if confirmed_changes.get((uuid, PlayerStatsTask.guild_key(old_guild), None)):
+                departed_members.append((uuid, old_guild, old_rank))
         for uuid, old_guild, old_rank in departed_members:
             inserts_guild_log.append(
                 f"('{uuid}', '{PlayerStatsTask.sql_escape(old_guild)}', '{PlayerStatsTask.sql_escape(old_rank)}', 'None', {int(time.time())})"
