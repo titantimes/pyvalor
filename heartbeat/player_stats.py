@@ -417,9 +417,13 @@ class PlayerStatsTask(Task):
 
         guild = stats.get("guild", {}).get("name") if stats.get("guild") else None
         guild_rank = stats.get("guild", {}).get("rank") if stats.get("guild") else None
-        old_guild, old_rank = old_membership.get(uuid, [None, None])
+        current_membership = Connection.execute(
+            "SELECT guild, guild_rank FROM player_stats WHERE uuid = %s",
+            prep_values=[uuid],
+        )
+        old_guild, old_rank = current_membership[0] if current_membership else old_membership.get(uuid, [None, None])
 
-        if old_guild is None:
+        if not current_membership and uuid not in old_membership:
             latest_guild_log = Connection.execute(
                 "SELECT joined FROM guild_join_log WHERE uuid = %s ORDER BY date DESC LIMIT 1",
                 prep_values=[uuid],
@@ -430,8 +434,11 @@ class PlayerStatsTask(Task):
         if old_guild == "None":
             old_guild = None
 
+        if "guild" not in stats:
+            guild, guild_rank = old_guild, old_rank
+
         if str(guild or "None").casefold() != str(old_guild or "None").casefold():
-            inserts_guild_log.append(f"('{uuid}', '{old_guild}', '{old_rank}', '{guild}', {int(time.time())})")
+            inserts_guild_log.append(f"('{uuid}', '{PlayerStatsTask.sql_escape(old_guild)}', '{PlayerStatsTask.sql_escape(old_rank)}', '{PlayerStatsTask.sql_escape(guild)}', {int(time.time())})")
 
         row[PlayerStatsTask.idx["guild"]] = f'"{guild}"'
         row[PlayerStatsTask.idx["guild_rank"]] = f'"{guild_rank}"'
@@ -540,14 +547,25 @@ class PlayerStatsTask(Task):
             return 0
 
         members_by_uuid = {}
+        conflicting_uuids = set()
         for guild, guild_rank, member_name, member_data in roster_members:
+            if guild not in fetched_guilds:
+                continue
             if not isinstance(member_data, dict):
+                fetched_guilds.discard(guild)
                 continue
             uuid = member_data.get("uuid")
             username = member_data.get("legacyName") or member_name
             if not uuid or not username:
+                fetched_guilds.discard(guild)
                 continue
+            if uuid in members_by_uuid and members_by_uuid[uuid][0] != guild:
+                conflicting_uuids.add(uuid)
             members_by_uuid[uuid] = (guild, guild_rank, username, member_data)
+        members_by_uuid = {
+            uuid: member for uuid, member in members_by_uuid.items()
+            if member[0] in fetched_guilds and uuid not in conflicting_uuids
+        }
 
         fetched_guild_list = list(fetched_guilds)
         prior_memberships = []
@@ -594,7 +612,7 @@ class PlayerStatsTask(Task):
 
             old_guild, old_rank = old_membership.get(uuid, [None, None])
             previous_guild = prev_graidcounts.get(uuid, {}).get("guild")
-            if old_guild is None:
+            if uuid not in old_membership:
                 old_guild = previous_guild
             if str(old_guild or "None").casefold() != str(guild or "None").casefold():
                 inserts_guild_log.append(
@@ -617,7 +635,7 @@ class PlayerStatsTask(Task):
         departed_members = [
             (uuid, guild, guild_rank)
             for uuid, (guild, guild_rank) in prior_memberships_by_uuid.items()
-            if uuid not in members_by_uuid
+            if uuid not in members_by_uuid and uuid not in conflicting_uuids
         ]
         for uuid, old_guild, old_rank in departed_members:
             inserts_guild_log.append(
@@ -647,8 +665,16 @@ class PlayerStatsTask(Task):
             for offset in range(0, len(uuids), 500):
                 uuid_batch = uuids[offset:offset + 500]
                 quoted_uuids = ",".join(f"'{PlayerStatsTask.sql_escape(uuid)}'" for uuid in uuid_batch)
+                membership_rows = []
+                for uuid in uuid_batch:
+                    values = ["0"] * len(PlayerStatsTask.idx)
+                    values[PlayerStatsTask.idx["uuid"]] = f"'{PlayerStatsTask.sql_escape(uuid)}'"
+                    values[PlayerStatsTask.idx["guild"]] = f"'{quoted_guild}'"
+                    values[PlayerStatsTask.idx["guild_rank"]] = f"'{quoted_rank}'"
+                    membership_rows.append("(" + ",".join(values) + ")")
                 membership_queries.append(
-                    f"UPDATE player_stats SET guild = '{quoted_guild}', guild_rank = '{quoted_rank}' WHERE uuid IN ({quoted_uuids})"
+                    f"INSERT INTO player_stats VALUES {','.join(membership_rows)} "
+                    "ON DUPLICATE KEY UPDATE guild = VALUES(guild), guild_rank = VALUES(guild_rank)"
                 )
                 membership_queries.append(
                     f"UPDATE cumu_graids SET guild = '{quoted_guild}' WHERE uuid IN ({quoted_uuids})"
@@ -658,7 +684,7 @@ class PlayerStatsTask(Task):
             membership_queries.append("INSERT INTO guild_join_log VALUES " + ",".join(inserts_guild_log))
 
         if membership_queries:
-            Connection.exec_all(membership_queries)
+            Connection.execute_transaction([(query, ()) for query in membership_queries])
             inserts_guild_log.clear()
 
         PlayerStatsTask.write_results_to_db(
@@ -706,7 +732,7 @@ class PlayerStatsTask(Task):
         # search_players = [x[0] for x in Connection.execute("SELECT * FROM `player_stats` ORDER BY playtime DESC LIMIT 10000;")][5000:]
 
         old_membership = {}
-        res = Connection.execute(f"SELECT uuid, guild, guild_rank FROM `player_stats` WHERE guild IS NOT NULL and guild != 'None' and guild != '' AND uuid IN {existing_uuids_clause}",
+        res = Connection.execute(f"SELECT uuid, guild, guild_rank FROM `player_stats` WHERE uuid IN {existing_uuids_clause}",
                                 prep_values=existing_player_uuids)
         for uuid, guild, guild_rank in res:
             old_membership[uuid] = [guild, guild_rank]
