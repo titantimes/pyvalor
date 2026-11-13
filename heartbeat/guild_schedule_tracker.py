@@ -19,21 +19,21 @@ class GuildScheduleTrackerTask(Task):
 
     @staticmethod
     def getTierFromGraids(dailyGraids):
-        if dailyGraids >= 150:
+        if dailyGraids >= 100:
             return 3
-        elif dailyGraids >= 75:
+        elif dailyGraids >= 50:
             return 2
-        elif dailyGraids >= 25:
+        elif dailyGraids >= 15:
             return 1
         return 0
 
     @staticmethod
     def getTierFromWars(dailyWars):
-        if dailyWars >= 300:
+        if dailyWars >= 200:
             return 3
-        elif dailyWars >= 150:
+        elif dailyWars >= 100:
             return 2
-        elif dailyWars >= 75:
+        elif dailyWars >= 50:
             return 1
         return 0
 
