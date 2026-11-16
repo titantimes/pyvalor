@@ -26,7 +26,7 @@ class PlayerStatsTask(Task):
                'weaponsmithing': 34, 'woodcutting': 35, 'woodworking': 36, 'Nest of the Grootslangs': 37, 'The Canyon Colossus': 38, 
                "mobsKilled": 39, "deaths": 40, "guild": 41, "Orphion's Nexus of Light": 42, "guild_rank": 43, "The Nameless Anomaly": 44, 
                "Corrupted Galleon's Graveyard": 45, "Timelost Sanctum": 46, "lastjoin": 47,
-               "The Wartorn Palace": 48}
+               "The Wartorn Palace": 48, "supportRank": 49, "worldEvents": 50}
     
     global_stats_threshold = {"g_mobsKilled": 2500, "g_chestsFound": 20, "g_totalLevel": 3}
 
@@ -466,6 +466,7 @@ class PlayerStatsTask(Task):
 
         uuid = stats["uuid"]
         row[PlayerStatsTask.idx["uuid"]] = uuid
+        row[PlayerStatsTask.idx["supportRank"]] = stats.get("supportRank")
         player = stats["username"] # make sure player becomes username
 
         guild_data = stats.get("guild")
@@ -579,6 +580,7 @@ class PlayerStatsTask(Task):
             row[PlayerStatsTask.idx["blocksWalked"]] += PlayerStatsTask.null_or_value(cl.get("blocksWalked", 0))
             row[PlayerStatsTask.idx["logins"]] += PlayerStatsTask.null_or_value(cl.get("logins", 0))
             row[PlayerStatsTask.idx["deaths"]] += PlayerStatsTask.null_or_value(cl.get("deaths", 0))
+            row[PlayerStatsTask.idx["worldEvents"]] += PlayerStatsTask.null_or_value(cl.get("worldEvents", 0))
             row[PlayerStatsTask.idx["playtime"]] += PlayerStatsTask.null_or_value(cl.get("playtime", 0))
             # row[idx["combat"]] += cl["level"] todo combat lvl is gone
             
@@ -785,6 +787,7 @@ class PlayerStatsTask(Task):
                     values[PlayerStatsTask.idx["uuid"]] = f"'{PlayerStatsTask.sql_escape(uuid)}'"
                     values[PlayerStatsTask.idx["guild"]] = f"'{quoted_guild}'"
                     values[PlayerStatsTask.idx["guild_rank"]] = f"'{quoted_rank}'"
+                    values[PlayerStatsTask.idx["supportRank"]] = "NULL"
                     membership_rows.append("(" + ",".join(values) + ")")
                 membership_queries.append(
                     f"INSERT INTO player_stats VALUES {','.join(membership_rows)} "
